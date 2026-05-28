@@ -1254,6 +1254,201 @@
       flex-direction: column;
       gap: 14px;
     }
+
+    /* ── MOBILE RESPONSIVENESS MEDIA QUERY ── */
+    @media (max-width: 600px) {
+      .app-container {
+        padding: 16px 12px;
+        gap: 16px;
+      }
+
+      header {
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 4px;
+      }
+
+      .tabs-container {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .tab-btn {
+        flex: 1;
+        text-align: center;
+        padding: 8px 12px;
+        font-size: 12px;
+      }
+
+      /* Search layout on mobile */
+      .search-bar-row {
+        margin-bottom: 4px;
+      }
+
+      .search-input {
+        padding: 12px 14px 12px 42px;
+        font-size: 13px;
+      }
+
+      .categories-row {
+        gap: 6px;
+        padding-bottom: 4px;
+        overflow-x: auto;
+        justify-content: flex-start;
+        width: 100%;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .cat-btn {
+        padding: 6px 14px;
+        font-size: 11px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
+      /* Exactly two movie cards per row on mobile! */
+      .movie-grid {
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 12px !important;
+      }
+
+      .movie-card {
+        padding: 8px;
+        border-radius: 14px;
+        gap: 8px;
+      }
+
+      .movie-title {
+        font-size: 12px;
+        line-height: 1.3;
+      }
+
+      .movie-meta-pill {
+        font-size: 9px;
+        padding: 2px 6px;
+      }
+
+      /* Detail view layout on mobile */
+      .detail-header {
+        gap: 12px;
+      }
+
+      .back-btn {
+        width: 36px;
+        height: 36px;
+      }
+
+      .detail-title {
+        font-size: 16px;
+      }
+
+      .detail-meta-row {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .accordion-header {
+        padding: 14px 16px;
+      }
+
+      .accordion-title {
+        font-size: 13px;
+      }
+
+      .accordion-count {
+        padding: 2px 6px;
+        font-size: 10px;
+      }
+
+      .accordion-content {
+        padding: 12px;
+      }
+
+      .accordion-content-inner {
+        padding: 6px 12px 16px 12px;
+        gap: 12px;
+      }
+
+      /* Make option cards wrap beautifully on mobile! */
+      .option-group-card {
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 14px !important;
+        padding: 14px 16px !important;
+        min-height: auto !important;
+      }
+
+      .option-left-block {
+        min-width: 0 !important;
+        width: 100%;
+        justify-content: space-between;
+      }
+
+      .option-middle-block {
+        justify-content: flex-start !important;
+        width: 100%;
+      }
+
+      .divider-line {
+        display: none !important;
+      }
+
+      .option-buttons-row {
+        width: 100%;
+        flex-direction: column !important;
+        align-items: stretch !important;
+        gap: 8px !important;
+      }
+
+      .option-dl-btn {
+        width: 100% !important;
+        justify-content: center !important;
+        padding: 10px 14px !important;
+        font-size: 12px !important;
+      }
+
+      /* Direct downloads / Active Downloads layout on mobile */
+      .direct-input-row {
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .go-btn {
+        width: 100%;
+        padding: 12px;
+      }
+
+      .download-card-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .download-info {
+        width: 100%;
+      }
+
+      .dl-filename {
+        font-size: 12px;
+        max-width: 100%;
+      }
+
+      .dl-status {
+        align-self: flex-end;
+      }
+
+      .status-bar-footer {
+        flex-direction: column;
+        gap: 10px;
+        align-items: center;
+        text-align: center;
+      }
+
+      .retry-all-btn {
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
