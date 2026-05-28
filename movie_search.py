@@ -246,8 +246,8 @@ def extract_download_options(detail_url):
             # Traversal backward up to 800 characters to find the nearest quality or description header
             lookback = html[max(0, m.start() - 800):m.start()]
             
-            # Find all h2/h3 tags in this lookback region
-            headers = re.findall(r'<h[23][^>]*>(.*?)</h[23]>', lookback, re.IGNORECASE | re.DOTALL)
+            # Find all h1-h6 tags in this lookback region
+            headers = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', lookback, re.IGNORECASE | re.DOTALL)
             
             if headers:
                 header_text = re.sub(r'<[^>]+>', '', headers[-1]).strip()
