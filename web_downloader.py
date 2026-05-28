@@ -216,6 +216,11 @@ class VirtualDownloadCard:
         self.detail = "Retrying…"
 
     def to_json(self):
+        size_str = ""
+        if self.item_data and self.item_data.get("expected_size_bytes"):
+            size_str = fmt_bytes(self.item_data.get("expected_size_bytes"))
+            if size_str == "unknown":
+                size_str = ""
         return {
             "index": self.index,
             "filename": self.filename,
@@ -226,7 +231,8 @@ class VirtualDownloadCard:
             "status": self.status,
             "action_text": self.action_text,
             "action_state": self.action_state,
-            "resolved_url": self.url
+            "resolved_url": self.url,
+            "size": size_str
         }
 
 

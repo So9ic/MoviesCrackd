@@ -2506,7 +2506,8 @@
             let rightContent = '';
             if (dl.resolved_url) {
               // Completed with resolved URL — show download button
-              rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
+              const sizeSpan = dl.size ? ` <span style="color: var(--crimson); font-weight: 600; margin-left: 4px;">(${dl.size})</span>` : '';
+              rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn" style="white-space: nowrap; display: inline-flex; align-items: center; justify-content: center;">☁ Download to Device${sizeSpan}</a>`;
             } else if (dl.state === 3) {
               // Failed — show retry button
               rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index})">Retry</button>`;
