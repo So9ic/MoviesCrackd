@@ -1751,15 +1751,24 @@
       opacity: 1;
       transform: scale(1);
       pointer-events: auto;
-      background: linear-gradient(to top, rgba(7, 7, 11, 0.98) 0%, rgba(7, 7, 11, 0.5) 60%, rgba(7, 7, 11, 0) 100%) !important;
+      background: linear-gradient(to top, rgba(7, 7, 11, 0.95) 0%, rgba(7, 7, 11, 0.4) 50%, rgba(7, 7, 11, 0) 100%) !important;
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
       border-radius: 20px;
       padding: 16px;
+      transition: background 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .movie-card.static-overlay:hover .poster-hover-overlay {
+      background: linear-gradient(to top, rgba(7, 7, 11, 0.99) 0%, rgba(7, 7, 11, 0.75) 60%, rgba(7, 7, 11, 0.1) 100%) !important;
     }
 
     .movie-card.static-overlay .hover-overlay-content {
       transform: translateY(0);
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     }
     
     .movie-card.static-overlay .hover-overlay-main-title {
@@ -1767,6 +1776,29 @@
       font-weight: 700;
       color: #ffffff;
       line-height: 1.35;
+      transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .movie-card.static-overlay .hover-overlay-extra {
+      font-size: 10.5px;
+      color: rgba(255, 255, 255, 0.75);
+      line-height: 1.45;
+      font-weight: 500;
+      opacity: 0;
+      max-height: 0;
+      overflow: hidden;
+      transform: translateY(12px);
+      transition: opacity 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                  max-height 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
+                  margin-top 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .movie-card.static-overlay:hover .hover-overlay-extra {
+      opacity: 1;
+      max-height: 120px;
+      transform: translateY(0);
+      margin-top: 6px;
     }
 
     /* Category badge inside poster wrap */
@@ -2069,7 +2101,6 @@
         }
         resultsDiv.innerHTML = `
           <div class="trending-showcase-container">
-            <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); max-width: 1200px; margin: 0 auto 20px auto; padding: 0 20px; width: 100%;">⚡ Trending & Latest Releases</h2>
             ${rowsHtml}
           </div>
         `;
@@ -2092,15 +2123,20 @@
           const catClass = movie.category.toLowerCase() === 'animeflix' ? 'anime' : movie.category.toLowerCase();
           const categoryBadge = `<span class="cat-badge ${catClass}">${movie.category === 'ANIMEFLIX' ? 'ANIME' : movie.category}</span>`;
           
+          const titleRaw = movie.title;
+          let mainTitle = titleRaw.split(/[({\[]/)[0].trim();
+          if (!mainTitle) mainTitle = titleRaw;
+          
+          let extraDetails = titleRaw.substring(mainTitle.length).trim();
+          
           return `
             <div class="movie-card static-overlay" data-category="${movie.category}" onclick="event.stopPropagation(); viewDetails('${encodeURIComponent(JSON.stringify(movie))}')">
               <div class="poster-wrap">
                 ${movie.thumbnail ? `<img src="${movie.thumbnail}" class="poster-img" loading="lazy">` : `<div class="poster-placeholder"><i class="fa fa-film"></i></div>`}
                 <div class="poster-hover-overlay">
-                  ${movie.thumbnail ? `<img src="${movie.thumbnail}" class="hover-bg-img" loading="lazy">` : ''}
-                  <div class="hover-overlay-gradient"></div>
                   <div class="hover-overlay-content">
-                    <span class="hover-overlay-main-title">${movie.title}</span>
+                    <span class="hover-overlay-main-title">${mainTitle}</span>
+                    ${extraDetails ? `<span class="hover-overlay-extra">${extraDetails}</span>` : ''}
                   </div>
                 </div>
               </div>
@@ -2121,7 +2157,6 @@
 
       resultsDiv.innerHTML = `
         <div class="trending-showcase-container">
-          <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); max-width: 1200px; margin: 0 auto 20px auto; padding: 0 20px; width: 100%;">⚡ Trending & Latest Releases</h2>
           ${rowsHtml}
         </div>
       `;
@@ -2803,7 +2838,8 @@
       document.querySelector('.tabs-container').style.display = 'flex';
       
       document.getElementById('detail-panel').style.display = 'none';
-      document.getElementById('search-results').style.display = 'grid';
+      const q = document.getElementById('search-box').value.trim();
+      document.getElementById('search-results').style.display = q.length < 2 ? 'block' : 'grid';
     }
 
     function showDirectFromDetails() {
