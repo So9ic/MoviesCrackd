@@ -132,7 +132,7 @@ def fmt_bytes(num_bytes: int | None) -> str:
 def parse_size_hint_bytes(text: str | None) -> int | None:
     if not text:
         return None
-    m = re.search(r"(\d+(?:\.\d+)?)\s*([kmgt]?i?b)", text, re.IGNORECASE)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*([kmgt]i?b)", text, re.IGNORECASE)
     if not m:
         return None
     value = float(m.group(1))
@@ -218,9 +218,11 @@ class VirtualDownloadCard:
     def to_json(self):
         size_str = ""
         if self.item_data and self.item_data.get("expected_size_bytes"):
-            size_str = fmt_bytes(self.item_data.get("expected_size_bytes"))
-            if size_str == "unknown":
-                size_str = ""
+            exp_bytes = self.item_data.get("expected_size_bytes")
+            if exp_bytes and exp_bytes > 1024 * 100:
+                size_str = fmt_bytes(exp_bytes)
+                if size_str == "unknown":
+                    size_str = ""
         return {
             "index": self.index,
             "filename": self.filename,

@@ -159,7 +159,7 @@ def fmt_bytes(num_bytes: int | None) -> str:
 def parse_size_hint_bytes(text: str | None) -> int | None:
     if not text:
         return None
-    m = re.search(r"(\d+(?:\.\d+)?)\s*([kmgt]?i?b)", text, re.IGNORECASE)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*([kmgt]i?b)", text, re.IGNORECASE)
     if not m:
         return None
 
