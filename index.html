@@ -370,13 +370,11 @@
       position: relative;
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover {
-        transform: translateY(-8px);
-        background: var(--card-hover);
-        border-color: var(--border-hover);
-        box-shadow: 0 12px 30px rgba(99, 102, 241, 0.15);
-      }
+    .movie-card:not(.static-overlay):hover {
+      transform: translateY(-8px);
+      background: var(--card-hover);
+      border-color: var(--border-hover);
+      box-shadow: 0 12px 30px rgba(99, 102, 241, 0.15);
     }
 
     .poster-wrap {
@@ -398,10 +396,8 @@
       transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .poster-img {
-        transform: scale(1.04);
-      }
+    .movie-card:not(.static-overlay):hover .poster-img {
+      transform: scale(1.04);
     }
 
     /* Full-card absolute overlay on hover, completely stable without changing card dimensions! */
@@ -425,11 +421,9 @@
       transform: scale(0.98);
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .poster-hover-overlay {
-        opacity: 1;
-        transform: scale(1);
-      }
+    .movie-card:not(.static-overlay):hover .poster-hover-overlay {
+      opacity: 1;
+      transform: scale(1);
     }
 
     .hover-bg-img {
@@ -444,10 +438,8 @@
       transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .hover-bg-img {
-        transform: scale(1.04);
-      }
+    .movie-card:not(.static-overlay):hover .hover-bg-img {
+      transform: scale(1.04);
     }
 
     .hover-overlay-gradient {
@@ -477,10 +469,8 @@
       transform: translateY(12px);
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .hover-overlay-content {
-        transform: translateY(0);
-      }
+    .movie-card:not(.static-overlay):hover .hover-overlay-content {
+      transform: translateY(0);
     }
 
     .hover-overlay-main-title {
@@ -516,10 +506,8 @@
       transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .poster-placeholder {
-        transform: scale(1.04);
-      }
+    .movie-card:not(.static-overlay):hover .poster-placeholder {
+      transform: scale(1.04);
     }
 
     /* Category Tag Overlay */
@@ -552,12 +540,10 @@
       opacity: 1;
     }
 
-    @media (hover: hover) and (min-width: 769px) {
-      .movie-card:hover .movie-details {
-        opacity: 0;
-        transform: translateY(12px);
-        pointer-events: none;
-      }
+    .movie-card:not(.static-overlay):hover .movie-details {
+      opacity: 0;
+      transform: translateY(12px);
+      pointer-events: none;
     }
 
     .movie-title {
