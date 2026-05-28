@@ -857,6 +857,48 @@
       box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
     }
 
+    .dl-download-btn-partitioned {
+      display: inline-flex;
+      align-items: stretch;
+      border-radius: 20px;
+      overflow: hidden;
+      text-decoration: none;
+      box-shadow: 0 2px 12px rgba(16, 185, 129, 0.25);
+      transition: all 0.25s;
+      border: none;
+      cursor: pointer;
+    }
+
+    .dl-download-btn-partitioned:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 18px rgba(16, 185, 129, 0.4);
+    }
+
+    .dl-download-btn-partitioned .dl-btn-left {
+      background: #00c853;
+      color: #ffffff;
+      padding: 8px 18px;
+      font-family: var(--font-inter);
+      font-size: 12px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .dl-download-btn-partitioned .dl-btn-right {
+      background: var(--crimson);
+      color: #ffffff;
+      padding: 8px 18px;
+      font-family: var(--font-inter);
+      font-size: 12px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      white-space: nowrap;
+    }
+
     .dl-retry-btn {
       background: rgba(239, 68, 68, 0.12);
       color: var(--crimson);
@@ -1535,6 +1577,15 @@
 
       .dl-download-btn {
         width: 100%;
+        justify-content: center;
+      }
+
+      .dl-download-btn-partitioned {
+        width: 100%;
+      }
+
+      .dl-download-btn-partitioned .dl-btn-left {
+        flex-grow: 1;
         justify-content: center;
       }
 
@@ -2506,8 +2557,16 @@
             let rightContent = '';
             if (dl.resolved_url) {
               // Completed with resolved URL — show download button
-              const sizeSpan = dl.size ? ` <span style="color: var(--crimson); font-weight: 600; margin-left: 4px;">(${dl.size})</span>` : '';
-              rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn" style="white-space: nowrap; display: inline-flex; align-items: center; justify-content: center;">☁ Download to Device${sizeSpan}</a>`;
+              if (dl.size) {
+                rightContent = `
+                  <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
+                    <span class="dl-btn-left">☁ Download to Device</span>
+                    <span class="dl-btn-right">(${dl.size})</span>
+                  </a>
+                `;
+              } else {
+                rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
+              }
             } else if (dl.state === 3) {
               // Failed — show retry button
               rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index})">Retry</button>`;
