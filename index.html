@@ -1625,22 +1625,41 @@
       flex-direction: column;
       gap: 20px;
       padding: 15px 0 40px 0;
-      width: 100%;
-      overflow: hidden;
-      animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-    }
-
-    .marquee-row-wrapper {
-      overflow: hidden;
       width: 100vw;
       position: relative;
       left: 50%;
       right: 50%;
       margin-left: -50vw;
       margin-right: -50vw;
+      overflow: hidden;
+      animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .marquee-row-wrapper {
+      overflow: hidden;
+      width: 100%;
+      position: relative;
       padding: 10px 0;
-      mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
-      -webkit-mask-image: linear-gradient(to right, transparent 0%, black 10%, black 90%, transparent 100%);
+    }
+
+    .marquee-row-wrapper::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; bottom: 0;
+      width: 15vw;
+      background: linear-gradient(to right, #07070b 0%, rgba(7, 7, 11, 0) 100%);
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    .marquee-row-wrapper::after {
+      content: '';
+      position: absolute;
+      top: 0; right: 0; bottom: 0;
+      width: 15vw;
+      background: linear-gradient(to left, #07070b 0%, rgba(7, 7, 11, 0) 100%);
+      z-index: 10;
+      pointer-events: none;
     }
 
     .marquee-track {
@@ -1648,6 +1667,9 @@
       gap: 24px;
       width: max-content;
       will-change: transform;
+      transform: translate3d(0, 0, 0);
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
       cursor: grab;
       user-select: none;
     }
@@ -1663,11 +1685,11 @@
     }
 
     .marquee-track.left {
-      animation: marquee-left 45s linear infinite;
+      animation: marquee-left 75s linear infinite;
     }
 
     .marquee-track.right {
-      animation: marquee-right 45s linear infinite;
+      animation: marquee-right 75s linear infinite;
     }
 
     /* Pause sliding when hovering row */
@@ -1681,13 +1703,13 @@
     }
 
     @keyframes marquee-left {
-      0% { transform: translateX(0); }
-      100% { transform: translateX(-50%); }
+      0% { transform: translate3d(0, 0, 0); }
+      100% { transform: translate3d(-50%, 0, 0); }
     }
 
     @keyframes marquee-right {
-      0% { transform: translateX(-50%); }
-      100% { transform: translateX(0); }
+      0% { transform: translate3d(-50%, 0, 0); }
+      100% { transform: translate3d(0, 0, 0); }
     }
 
     /* Showcase static overlay card */
@@ -1699,15 +1721,24 @@
       overflow: hidden;
       border-radius: 20px;
       flex-shrink: 0;
+      background: #0f0f18 !important; /* solid color bg for high mobile rendering performance */
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
       transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), 
                   transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), 
                   width 0.5s cubic-bezier(0.16, 1, 0.3, 1), 
                   margin-right 0.5s cubic-bezier(0.16, 1, 0.3, 1),
                   border-color 0.5s cubic-bezier(0.16, 1, 0.3, 1);
       margin-right: 0;
-      background: var(--card-bg);
-      backdrop-filter: blur(16px);
-      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25);
+    }
+    
+    .movie-card.static-overlay .hover-bg-img {
+      display: none !important; /* Hide secondary background poster to improve mobile rendering FPS */
+    }
+
+    .movie-card.static-overlay .hover-overlay-gradient {
+      display: none !important; /* Disable animated gradient overlays to reduce mobile render time */
     }
     
     .movie-card.static-overlay .poster-wrap {
@@ -1720,7 +1751,9 @@
       opacity: 1;
       transform: scale(1);
       pointer-events: auto;
-      background: linear-gradient(to top, rgba(10, 10, 15, 0.98) 0%, rgba(10, 10, 15, 0.5) 60%, rgba(10, 10, 15, 0) 100%);
+      background: linear-gradient(to top, rgba(7, 7, 11, 0.98) 0%, rgba(7, 7, 11, 0.5) 60%, rgba(7, 7, 11, 0) 100%) !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
       border-radius: 20px;
       padding: 16px;
     }
@@ -1752,6 +1785,57 @@
       margin-right: -24px !important;
       border-color: transparent !important;
       pointer-events: none !important;
+    }
+
+    /* ── Mobile Optimization for Showcase ── */
+    @media (max-width: 768px) {
+      .trending-showcase-container {
+        gap: 14px;
+        padding: 10px 0 30px 0;
+      }
+      .movie-card.static-overlay {
+        width: 120px !important;
+        height: 176px !important;
+        border-radius: 14px !important;
+      }
+      .movie-card.static-overlay .poster-wrap {
+        border-radius: 14px !important;
+      }
+      .movie-card.static-overlay .poster-hover-overlay {
+        border-radius: 14px !important;
+        padding: 10px !important;
+      }
+      .movie-card.static-overlay .hover-overlay-main-title {
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        line-height: 1.25 !important;
+      }
+      .movie-card.static-overlay .cat-badge {
+        top: 8px !important;
+        left: 8px !important;
+        font-size: 7.5px !important;
+        padding: 2px 6px !important;
+        border-radius: 6px !important;
+      }
+      .marquee-track {
+        gap: 12px !important;
+      }
+      .marquee-group {
+        gap: 12px !important;
+      }
+      .marquee-row-wrapper {
+        padding: 4px 0 !important;
+      }
+      .marquee-row-wrapper::before,
+      .marquee-row-wrapper::after {
+        width: 10vw !important;
+      }
+      .marquee-track.left {
+        animation-duration: 55s !important;
+      }
+      .marquee-track.right {
+        animation-duration: 55s !important;
+      }
     }
   </style>
 </head>
@@ -1985,7 +2069,7 @@
         }
         resultsDiv.innerHTML = `
           <div class="trending-showcase-container">
-            <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text);">⚡ Trending & Latest Releases</h2>
+            <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); max-width: 1200px; margin: 0 auto 20px auto; padding: 0 20px; width: 100%;">⚡ Trending & Latest Releases</h2>
             ${rowsHtml}
           </div>
         `;
@@ -2037,7 +2121,7 @@
 
       resultsDiv.innerHTML = `
         <div class="trending-showcase-container">
-          <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text);">⚡ Trending & Latest Releases</h2>
+          <h2 style="font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 20px; color: var(--text); max-width: 1200px; margin: 0 auto 20px auto; padding: 0 20px; width: 100%;">⚡ Trending & Latest Releases</h2>
           ${rowsHtml}
         </div>
       `;
