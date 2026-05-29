@@ -224,6 +224,9 @@
 
       // Apply current category filter if one is active
       filterShowcaseByCategory(currentCategory);
+      
+      // Initialize dynamic high-performance interactive marquees!
+      initInteractiveMarquees();
     }
 
     function filterShowcaseByCategory(category) {
@@ -239,6 +242,194 @@
 
     function toggleMarqueePause(track) {
       track.classList.toggle('paused');
+    }
+
+    function initInteractiveMarquees() {
+      const tracks = document.querySelectorAll('.marquee-track');
+      tracks.forEach(track => {
+        // Prevent duplicate initialization
+        if (track.dataset.initialized) return;
+        track.dataset.initialized = 'true';
+
+        const isLeft = track.classList.contains('left');
+        const baseSpeed = isLeft ? -0.8 : 0.8;
+        
+        let x = 0;
+        let velocity = 0;
+        let isDragging = false;
+        let hasMoved = false;
+        let isScrolling = false;
+        
+        let startX = 0;
+        let startY = 0;
+        let startTranslate = 0;
+        let lastX = 0;
+        let lastTime = 0;
+        let animationFrameId = null;
+
+        // Force disable keyframe animations so they don't fight custom translate3d
+        track.style.animation = 'none';
+        track.style.transition = 'none';
+
+        function getGroupWidth() {
+          const group = track.querySelector('.marquee-group');
+          return group ? group.offsetWidth : 0;
+        }
+
+        function wrapOffset(val, groupWidth) {
+          if (groupWidth <= 0) return val;
+          while (val <= -groupWidth) {
+            val += groupWidth;
+          }
+          while (val > 0) {
+            val -= groupWidth;
+          }
+          return val;
+        }
+
+        function updateTransform() {
+          track.style.transform = `translate3d(${x}px, 0, 0)`;
+        }
+
+        function onStart(clientX, clientY) {
+          isDragging = true;
+          hasMoved = false;
+          isScrolling = false;
+          velocity = 0;
+          startX = clientX;
+          startY = clientY || 0;
+          startTranslate = x;
+          lastX = clientX;
+          lastTime = performance.now();
+          track.classList.add('paused');
+          
+          window.addEventListener('mousemove', onMouseMoveWindow);
+          window.addEventListener('mouseup', onMouseUpWindow);
+        }
+
+        function onMove(clientX, clientY, e) {
+          if (!isDragging) return;
+          
+          // Detect horizontal vs vertical scroll swipe intention on touch devices
+          if (clientY !== undefined && !isScrolling) {
+            const dy = Math.abs(clientY - startY);
+            const dx = Math.abs(clientX - startX);
+            if (dy > dx && dy > 10) {
+              isScrolling = true;
+              isDragging = false;
+              track.classList.remove('paused');
+              return;
+            }
+          }
+
+          if (isScrolling) return;
+
+          // Prevent vertical page scroll jiggle during active horizontal swipe
+          if (e && e.cancelable) {
+            e.preventDefault();
+          }
+
+          const groupWidth = getGroupWidth();
+          const dx = clientX - startX;
+          
+          if (Math.abs(dx) > 10) {
+            hasMoved = true;
+          }
+          
+          x = wrapOffset(startTranslate + dx, groupWidth);
+          
+          const now = performance.now();
+          const dt = now - lastTime;
+          const dist = clientX - lastX;
+          if (dt > 0) {
+            const targetVel = (dist / dt) * 16.666;
+            // Interpolate dynamic speed smoothly
+            velocity = velocity * 0.7 + targetVel * 0.3;
+          }
+          
+          lastX = clientX;
+          lastTime = now;
+          updateTransform();
+        }
+
+        function onEnd() {
+          if (!isDragging) return;
+          isDragging = false;
+          track.classList.remove('paused');
+          
+          // Momentarily disable pointer events to drop any synthetic click events spawned by drag release
+          if (hasMoved) {
+            track.style.pointerEvents = 'none';
+            setTimeout(() => {
+              track.style.pointerEvents = 'auto';
+            }, 50);
+          }
+        }
+
+        function onMouseMoveWindow(e) {
+          onMove(e.clientX, e.clientY, e);
+        }
+
+        function onMouseUpWindow() {
+          onEnd();
+          window.removeEventListener('mousemove', onMouseMoveWindow);
+          window.removeEventListener('mouseup', onMouseUpWindow);
+        }
+
+        // Mouse Event Listeners
+        track.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return; // Only left click drags
+          onStart(e.clientX, e.clientY);
+        });
+
+        // Prevent native browser ghost image dragging behavior
+        track.addEventListener('dragstart', (e) => {
+          e.preventDefault();
+        });
+
+        // Touch Event Listeners
+        track.addEventListener('touchstart', (e) => {
+          onStart(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: true });
+
+        track.addEventListener('touchmove', (e) => {
+          onMove(e.touches[0].clientX, e.touches[0].clientY, e);
+        }, { passive: false });
+
+        track.addEventListener('touchend', () => {
+          onEnd();
+        });
+
+        // Smooth Physics Autoplay Tick Loop
+        function tick() {
+          if (!isDragging) {
+            const groupWidth = getGroupWidth();
+            
+            // Decelerate momentum speed
+            if (Math.abs(velocity) > 0.05) {
+              x += velocity;
+              velocity *= 0.95; // Friction constant
+            } else {
+              velocity = 0;
+            }
+
+            // Normal scroll behavior when not hovered/paused
+            const isHovered = track.closest('.marquee-row-wrapper').matches(':hover');
+            const isPaused = track.classList.contains('paused');
+            
+            if (!isHovered && !isPaused) {
+              x += baseSpeed;
+            }
+            
+            x = wrapOffset(x, groupWidth);
+            updateTransform();
+          }
+          
+          animationFrameId = requestAnimationFrame(tick);
+        }
+
+        tick();
+      });
     }
 
     function selectCategory(cat) {
