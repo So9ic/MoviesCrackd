@@ -328,6 +328,7 @@
     let currentSuggestions = [];
     let activeSuggestionIndex = -1;
     const suggestionsClientCache = {};
+    let activeSuggestController = null;
 
     function clearSearch() {
       const searchBox = document.getElementById('search-box');
@@ -404,6 +405,10 @@
       if (!dropdownEl) return;
 
       if (query.length < 2) {
+        if (activeSuggestController) {
+          activeSuggestController.abort();
+          activeSuggestController = null;
+        }
         currentSuggestions = [];
         activeSuggestionIndex = -1;
         dropdownEl.style.display = 'none';
@@ -416,16 +421,27 @@
       // Zero-latency instant rendering if cached client-side!
       if (suggestionsClientCache[cacheKey]) {
         clearTimeout(suggestionDebounceTimer);
+        if (activeSuggestController) {
+          activeSuggestController.abort();
+          activeSuggestController = null;
+        }
         currentSuggestions = suggestionsClientCache[cacheKey];
         activeSuggestionIndex = -1;
         renderSuggestionsDropdown();
         return;
       }
 
+      // Cancel any inflight suggestion request to avoid network overlap and lag!
+      if (activeSuggestController) {
+        activeSuggestController.abort();
+      }
+      activeSuggestController = new AbortController();
+      const signal = activeSuggestController.signal;
+
       // Fast 80ms debounce for extremely realtime feel!
       clearTimeout(suggestionDebounceTimer);
       suggestionDebounceTimer = setTimeout(() => {
-        fetch(`/api/suggest?q=${encodeURIComponent(query)}`)
+        fetch(`/api/suggest?q=${encodeURIComponent(query)}`, { signal })
           .then(res => res.json())
           .then(data => {
             const results = data || [];
@@ -439,7 +455,8 @@
             activeSuggestionIndex = -1;
             renderSuggestionsDropdown();
           })
-          .catch(() => {
+          .catch((err) => {
+            if (err.name === 'AbortError') return;
             currentSuggestions = [];
             activeSuggestionIndex = -1;
             dropdownEl.style.display = 'none';

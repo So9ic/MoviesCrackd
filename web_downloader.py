@@ -1400,23 +1400,33 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         except Exception:
                             pass
 
-                # 1. Fetch IMDb tt ID for accurate priority searching
-                imdb_id = None
-                try:
-                    imdb_id = get_imdb_id(query)
-                except Exception as ex:
-                    print(f"[-] IMDb scraper failed to retrieve ID: {ex}")
-
-                # 2. If tt ID found, search it first to stream results to place them at the very top!
-                if imdb_id:
-                    print(f"[+] Found IMDb ID '{imdb_id}' for query '{query}'. Performing priority search...")
+                # Run text search and IMDb resolution/priority search in parallel!
+                def run_text_search():
                     try:
-                        search_movies(imdb_id, cats, on_result_callback=_on_result)
+                        search_movies(query, cats, on_result_callback=_on_result)
                     except Exception as ex:
-                        print(f"[-] Priority search for IMDb ID '{imdb_id}' failed: {ex}")
+                        print(f"[-] Parallel text search failed: {ex}")
 
-                # 3. Perform original text search in parallel (deduplicated by sent_urls set)
-                search_movies(query, cats, on_result_callback=_on_result)
+                def run_priority_search():
+                    try:
+                        # 1. Fetch IMDb tt ID for accurate priority searching in parallel
+                        imdb_id = get_imdb_id(query)
+                        if imdb_id:
+                            print(f"[+] Found IMDb ID '{imdb_id}' for query '{query}'. Performing parallel priority search...")
+                            search_movies(imdb_id, cats, on_result_callback=_on_result)
+                    except Exception as ex:
+                        print(f"[-] Parallel priority search failed: {ex}")
+
+                # Spawn both search tasks in parallel threads
+                t1 = threading.Thread(target=run_text_search)
+                t2 = threading.Thread(target=run_priority_search)
+                
+                t1.start()
+                t2.start()
+                
+                # Wait for both concurrent search threads to finish completely!
+                t1.join()
+                t2.join()
                 
                 # Write search completion event
                 with write_lock:
@@ -1425,8 +1435,9 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 err_data = {"status": "error", "message": str(e)}
                 try:
-                    self.wfile.write(f"data: {json.dumps(err_data)}\n\n".encode('utf-8'))
-                    self.wfile.flush()
+                    with write_lock:
+                        self.wfile.write(f"data: {json.dumps(err_data)}\n\n".encode('utf-8'))
+                        self.wfile.flush()
                 except Exception:
                     pass
             return

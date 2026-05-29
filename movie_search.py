@@ -16,13 +16,22 @@ WORKING_PROXY = None
 RESOLVED_DOMAINS = {}
 FAILED_DOMAINS = {}  # domain -> timestamp of failure
 
+# High-performance requests session with custom connection pooling and retries
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+HTTP_SESSION = requests.Session()
+retries = Retry(total=3, backoff_factor=0.1, status_forcelist=[500, 502, 503, 504])
+HTTP_SESSION.mount('http://', HTTPAdapter(pool_connections=15, pool_maxsize=40, max_retries=retries))
+HTTP_SESSION.mount('https://', HTTPAdapter(pool_connections=15, pool_maxsize=40, max_retries=retries))
+
 
 
 def test_proxy(page_url, p):
     """Test if a proxy successfully resolves the target page."""
     try:
         p_dict = {'http': f'http://{p}', 'https': f'http://{p}'}
-        resp = requests.get(
+        resp = HTTP_SESSION.get(
             page_url,
             headers={
                 'User-Agent': (
@@ -49,7 +58,7 @@ def fetch_with_fallback(url, max_proxies=50):
     if WORKING_PROXY:
         try:
             p_dict = {'http': f'http://{WORKING_PROXY}', 'https': f'http://{WORKING_PROXY}'}
-            resp = requests.get(
+            resp = HTTP_SESSION.get(
                 url,
                 headers={
                     'User-Agent': (
@@ -68,7 +77,7 @@ def fetch_with_fallback(url, max_proxies=50):
 
     # 2. Try direct request
     try:
-        resp = requests.get(
+        resp = HTTP_SESSION.get(
             url,
             headers={
                 'User-Agent': (
@@ -88,7 +97,7 @@ def fetch_with_fallback(url, max_proxies=50):
     print(f"    [!] Direct fetch blocked. Launching parallel proxy resolver for: {url}")
     try:
         proxy_url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all'
-        r = requests.get(proxy_url, timeout=(1.5, 2.5))
+        r = HTTP_SESSION.get(proxy_url, timeout=(1.5, 2.5))
         proxies = [p.strip() for p in r.text.strip().split('\n') if p.strip()]
         
         import random

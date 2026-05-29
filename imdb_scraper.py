@@ -2,6 +2,9 @@ import urllib.parse
 import requests
 import sys
 
+# Shared high-performance session for IMDb ID resolution
+IMDB_SESSION = requests.Session()
+
 def get_imdb_id(query: str) -> str:
     """
     Given a movie or TV show title, returns its IMDb ID (e.g. 'tt1190634').
@@ -26,7 +29,7 @@ def get_imdb_id(query: str) -> str:
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=5)
+        response = IMDB_SESSION.get(url, headers=headers, timeout=5)
         if response.status_code == 200:
             data = response.json()
             results = data.get("d", [])
