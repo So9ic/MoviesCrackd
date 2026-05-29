@@ -1082,11 +1082,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         pass
 
     def send_json(self, data, status=200):
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps(data).encode('utf-8'))
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass  # Client closed the connection early (e.g. AbortController) — safe to ignore
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -1347,6 +1350,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     IMDB_SUGGEST_CACHE[query_lower] = res_payload
                     self.send_json(res_payload)
                     return
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass  # Client aborted (AbortController) — expected during fast typing
             except Exception as e:
                 print(f"[!] Autocomplete proxy error: {e}", flush=True)
             self.send_json([])
@@ -1535,6 +1540,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 # Threaded TCPServer helper to support concurrent requests beautifully
 class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """Suppress noisy BrokenPipe/ConnectionReset tracebacks from aborted client connections."""
+        import sys
+        exc_type = sys.exc_info()[0]
+        if exc_type in (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return  # Client disconnected early — completely expected, no log needed
+        super().handle_error(request, client_address)
 
 
 def main():
