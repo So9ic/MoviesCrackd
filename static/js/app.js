@@ -409,6 +409,7 @@
           activeSuggestController.abort();
           activeSuggestController = null;
         }
+        clearTimeout(suggestionDebounceTimer);
         currentSuggestions = [];
         activeSuggestionIndex = -1;
         dropdownEl.style.display = 'none';
@@ -418,7 +419,7 @@
 
       const cacheKey = query.trim().toLowerCase();
 
-      // Zero-latency instant rendering if cached client-side!
+      // Zero-latency instant rendering if exact match cached client-side!
       if (suggestionsClientCache[cacheKey]) {
         clearTimeout(suggestionDebounceTimer);
         if (activeSuggestController) {
@@ -431,16 +432,44 @@
         return;
       }
 
-      // Cancel any inflight suggestion request to avoid network overlap and lag!
+      // Local prefix subset filtering: if 'inc' is cached, filter it for 'ince' instantly
+      // without making a network call — only fetch from server if the filtered set is empty
+      const prefixKeys = Object.keys(suggestionsClientCache)
+        .filter(k => cacheKey.startsWith(k))
+        .sort((a, b) => b.length - a.length);
+
+      if (prefixKeys.length > 0) {
+        const parentResults = suggestionsClientCache[prefixKeys[0]];
+        const filtered = parentResults.filter(sug =>
+          sug.title.toLowerCase().includes(cacheKey)
+        );
+        if (filtered.length > 0) {
+          clearTimeout(suggestionDebounceTimer);
+          if (activeSuggestController) {
+            activeSuggestController.abort();
+            activeSuggestController = null;
+          }
+          suggestionsClientCache[cacheKey] = filtered;
+          currentSuggestions = filtered;
+          activeSuggestionIndex = -1;
+          renderSuggestionsDropdown();
+          return;
+        }
+      }
+
+      // Cancel any inflight suggestion request to avoid network overlap!
       if (activeSuggestController) {
         activeSuggestController.abort();
+        activeSuggestController = null;
       }
-      activeSuggestController = new AbortController();
-      const signal = activeSuggestController.signal;
 
-      // Fast 80ms debounce for extremely realtime feel!
+      // Fast 60ms debounce — server-side cache makes responses near-instant
       clearTimeout(suggestionDebounceTimer);
       suggestionDebounceTimer = setTimeout(() => {
+        // Create AbortController inside the timeout so it only exists when fetch is actually dispatched
+        activeSuggestController = new AbortController();
+        const signal = activeSuggestController.signal;
+
         fetch(`/api/suggest?q=${encodeURIComponent(query)}`, { signal })
           .then(res => res.json())
           .then(data => {
@@ -461,7 +490,7 @@
             activeSuggestionIndex = -1;
             dropdownEl.style.display = 'none';
           });
-      }, 80);
+      }, 60);
     }
 
     function renderSuggestionsDropdown() {

@@ -1,9 +1,11 @@
 import urllib.parse
 import requests
+from requests.adapters import HTTPAdapter
 import sys
 
-# Shared high-performance session for IMDb ID resolution
+# Shared high-performance session for IMDb ID resolution with connection pooling
 IMDB_SESSION = requests.Session()
+IMDB_SESSION.mount('https://', HTTPAdapter(pool_connections=5, pool_maxsize=10))
 
 def get_imdb_id(query: str) -> str:
     """

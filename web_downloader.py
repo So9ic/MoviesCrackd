@@ -40,8 +40,10 @@ from env_loader import load_env_file, session_file_exists
 # Load environments
 load_env_file()
 
-# Shared server-side IMDb suggestion cache to serve queries in microseconds
-IMDB_SUGGEST_CACHE = {}
+# Shared server-side IMDb suggestion LRU cache (OrderedDict for efficient eviction)
+from collections import OrderedDict
+IMDB_SUGGEST_CACHE = OrderedDict()
+IMDB_SUGGEST_CACHE_MAX = 500
 
 # Core Scraper and Resolver imports
 try:
@@ -1306,9 +1308,10 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.send_json([])
                 return
             
-            # Serve from microsecond server-side cache if present
+            # Serve from microsecond server-side LRU cache if present
             query_lower = query.lower()
             if query_lower in IMDB_SUGGEST_CACHE:
+                IMDB_SUGGEST_CACHE.move_to_end(query_lower)  # mark as recently used
                 self.send_json(IMDB_SUGGEST_CACHE[query_lower])
                 return
 
@@ -1321,7 +1324,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             safe_query = urllib.parse.quote(query_lower)
             url = f"https://v3.sg.media-imdb.com/suggestion/{first_letter}/{safe_query}.json"
             try:
-                response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
+                response = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
                 if response.status_code == 200:
                     data = response.json()
                     suggestions = []
@@ -1338,9 +1341,9 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                                 'image': item.get('i', {}).get('imageUrl')
                             })
                     res_payload = suggestions[:6]
-                    # Cache the result to guarantee zero-latency responses for repeated typing/backspacing
-                    if len(IMDB_SUGGEST_CACHE) > 500:
-                        IMDB_SUGGEST_CACHE.clear()
+                    # LRU eviction: drop oldest entries instead of nuking entire cache
+                    while len(IMDB_SUGGEST_CACHE) >= IMDB_SUGGEST_CACHE_MAX:
+                        IMDB_SUGGEST_CACHE.popitem(last=False)
                     IMDB_SUGGEST_CACHE[query_lower] = res_payload
                     self.send_json(res_payload)
                     return
