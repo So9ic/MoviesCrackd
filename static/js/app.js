@@ -1066,12 +1066,14 @@
             });
 
             let seasonPillsHtml = '';
-            seasonAudios.forEach(aud => {
-              seasonPillsHtml += `<span class="pill-badge pill-lang" style="font-size: 9.5px; padding: 3px 10px; margin-left: 6px;">🔊 ${aud}</span>`;
-            });
-            seasonSubs.forEach(sub => {
-              seasonPillsHtml += `<span class="pill-badge pill-tag" style="font-size: 9.5px; padding: 3px 10px; margin-left: 4px; background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25);">📝 ${sub}</span>`;
-            });
+            if (seasonAudios.size > 0) {
+              const audStr = Array.from(seasonAudios).join('-');
+              seasonPillsHtml += `<span class="pill-badge pill-lang" style="font-size: 9.5px; padding: 3px 10px; margin-left: 6px;">🔊 ${audStr}</span>`;
+            }
+            if (seasonSubs.size > 0) {
+              const subStr = Array.from(seasonSubs).join('-');
+              seasonPillsHtml += `<span class="pill-badge pill-tag" style="font-size: 9.5px; padding: 3px 10px; margin-left: 4px; background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.25);">📝 ${subStr}</span>`;
+            }
 
             accordionHtml += `
               <div class="accordion-item ${activeClass}">
