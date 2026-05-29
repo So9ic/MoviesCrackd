@@ -243,7 +243,8 @@ def extract_download_options(detail_url):
             # 1. Search for potential inline headers or label elements (h1-h6, strong, b, p, span)
             matches = re.findall(r'<(h[1-6]|strong|b|p|span)[^>]*>(.*?)</\1>', lookback, re.IGNORECASE | re.DOTALL)
             
-            # 2. Process from right to left (closest to the download button first)
+            # Find the closest inline quality label (closest to button)
+            quality_label = ""
             for tag, content in reversed(matches):
                 clean_text = re.sub(r'<[^>]+>', '', content).strip()
                 clean_text = re.sub(r'\s+', ' ', clean_text)
@@ -254,13 +255,34 @@ def extract_download_options(detail_url):
                 has_size = bool(re.search(r'\b\d+(?:\.\d+)?\s*(?:mb|gb)\b', text_lower))
                 
                 if clean_text and (has_res or has_size):
-                    return clean_text
-                    
-            # 3. Fallback to the last h1-h6 tag if any exist
+                    quality_label = clean_text
+                    break
+            
+            # Find the closest parent heading h1-h6 in the lookback
             h_matches = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', lookback, re.IGNORECASE | re.DOTALL)
+            heading_label = ""
             if h_matches:
                 clean_text = re.sub(r'<[^>]+>', '', h_matches[-1]).strip()
-                return re.sub(r'\s+', ' ', clean_text)
+                heading_label = re.sub(r'\s+', ' ', clean_text)
+            
+            # Combine them if appropriate
+            if heading_label and quality_label:
+                h_lower = heading_label.lower()
+                q_lower = quality_label.lower()
+                
+                # If they are essentially the same or one contains the other, use heading
+                if q_lower in h_lower or h_lower in q_lower:
+                    return heading_label
+                
+                # Filter out generic page-level or standard headings we don't want to append
+                generic_headings = ['storyline', 'screenshots', 'screen shots', 'trailer', 'download', 'direct download']
+                if not any(g in h_lower for g in generic_headings):
+                    return f"{heading_label} - {quality_label}"
+            
+            if quality_label:
+                return quality_label
+            if heading_label:
+                return heading_label
                 
             return "Direct Download"
 

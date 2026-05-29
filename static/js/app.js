@@ -526,11 +526,20 @@
         title = title.replace(sizeMatch[0], '').trim();
       }
       
-      // 2. Season extraction: e.g. "Season 1" or "S01"
+      // 2. Season/Group extraction: e.g. "Season 1", "S01", "Bonus Episode (Episode 8)", "OVA", "Movie"
       let season = '';
-      const seasonMatch = title.match(/(Season\s+\d+|S\d+)/i);
+      const seasonMatch = title.match(/(Season\s+\d+|S\d+|\bBonus\s+Episode\s*\(Episode\s*\d+\)|\bBonus\s+Episode|\bSpecial\s+Episode|\bOVA\b|\bMovie\b|\bComplete\s+Pack)/i);
       if (seasonMatch) {
-        season = seasonMatch[1];
+        season = seasonMatch[1].trim();
+        const lowerSeason = season.toLowerCase();
+        if (lowerSeason === 'ova') {
+          season = 'OVA';
+        } else if (lowerSeason === 'movie') {
+          season = 'Feature Movie';
+        } else {
+          // Capitalize first letter of each word neatly
+          season = season.replace(/\b\w/g, c => c.toUpperCase());
+        }
         title = title.replace(seasonMatch[0], '').trim();
       }
 
