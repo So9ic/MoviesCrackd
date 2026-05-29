@@ -10,20 +10,6 @@
 
     // Startup Init
     window.addEventListener('DOMContentLoaded', () => {
-      // IMDb suggestion keydown listener for ghost text completion (Tab/ArrowRight)
-      const searchBox = document.getElementById('search-box');
-      if (searchBox) {
-        searchBox.addEventListener('keydown', (e) => {
-          if (e.key === 'Tab' || e.key === 'ArrowRight') {
-            const isAtEnd = searchBox.selectionStart === searchBox.value.length;
-            if (currentGhostText && isAtEnd) {
-              e.preventDefault();
-              searchBox.value += currentGhostText;
-              hideSuggestions();
-            }
-          }
-        });
-      }
 
       // Close IMDb autocomplete dropdown when clicking outside
       document.addEventListener('click', (e) => {
@@ -341,7 +327,7 @@
     let suggestionDebounceTimer = null;
     let currentSuggestions = [];
     let activeSuggestionIndex = -1;
-    let currentGhostText = '';
+    const suggestionsClientCache = {};
 
     function clearSearch() {
       const searchBox = document.getElementById('search-box');
@@ -414,55 +400,51 @@
     }
 
     function handleSuggestions(query) {
-      const ghostEl = document.getElementById('search-ghost');
       const dropdownEl = document.getElementById('imdb-suggestions');
-      
-      if (!ghostEl || !dropdownEl) return;
+      if (!dropdownEl) return;
 
       if (query.length < 2) {
         currentSuggestions = [];
         activeSuggestionIndex = -1;
-        currentGhostText = '';
-        ghostEl.innerHTML = '';
         dropdownEl.style.display = 'none';
         dropdownEl.innerHTML = '';
         return;
       }
 
+      const cacheKey = query.trim().toLowerCase();
+
+      // Zero-latency instant rendering if cached client-side!
+      if (suggestionsClientCache[cacheKey]) {
+        clearTimeout(suggestionDebounceTimer);
+        currentSuggestions = suggestionsClientCache[cacheKey];
+        activeSuggestionIndex = -1;
+        renderSuggestionsDropdown();
+        return;
+      }
+
+      // Fast 80ms debounce for extremely realtime feel!
       clearTimeout(suggestionDebounceTimer);
       suggestionDebounceTimer = setTimeout(() => {
         fetch(`/api/suggest?q=${encodeURIComponent(query)}`)
           .then(res => res.json())
           .then(data => {
-            currentSuggestions = data || [];
+            const results = data || [];
+            suggestionsClientCache[cacheKey] = results;
+            
+            // Double check if query didn't change during the quick fetch
+            const currentQuery = document.getElementById('search-box')?.value || '';
+            if (currentQuery.trim().toLowerCase() !== cacheKey) return;
+
+            currentSuggestions = results;
             activeSuggestionIndex = -1;
             renderSuggestionsDropdown();
-            
-            // Generate Ghost autocomplete text
-            if (currentSuggestions.length > 0) {
-              const matchingSug = currentSuggestions.find(sug => sug.title.toLowerCase().startsWith(query.toLowerCase()));
-              if (matchingSug) {
-                const firstSug = matchingSug.title;
-                const completion = firstSug.slice(query.length);
-                currentGhostText = completion;
-                ghostEl.innerHTML = `<span style="color: transparent;">${escapeHtml(query)}</span><span class="search-ghost-text">${escapeHtml(completion)}</span>`;
-              } else {
-                currentGhostText = '';
-                ghostEl.innerHTML = '';
-              }
-            } else {
-              currentGhostText = '';
-              ghostEl.innerHTML = '';
-            }
           })
           .catch(() => {
             currentSuggestions = [];
             activeSuggestionIndex = -1;
-            currentGhostText = '';
-            ghostEl.innerHTML = '';
             dropdownEl.style.display = 'none';
           });
-      }, 150);
+      }, 80);
     }
 
     function renderSuggestionsDropdown() {
@@ -514,15 +496,11 @@
     }
 
     function hideSuggestions() {
-      const ghostEl = document.getElementById('search-ghost');
       const dropdownEl = document.getElementById('imdb-suggestions');
-      
-      if (ghostEl) ghostEl.innerHTML = '';
       if (dropdownEl) {
         dropdownEl.style.display = 'none';
         dropdownEl.innerHTML = '';
       }
-      currentGhostText = '';
       currentSuggestions = [];
       activeSuggestionIndex = -1;
     }
@@ -540,21 +518,6 @@
           item.classList.remove('keyboard-selected');
         }
       });
-      
-      const ghostEl = document.getElementById('search-ghost');
-      const searchBox = document.getElementById('search-box');
-      if (ghostEl && searchBox) {
-        const query = searchBox.value;
-        const currentSug = currentSuggestions[activeSuggestionIndex]?.title || currentSuggestions[0]?.title || '';
-        if (currentSug && currentSug.toLowerCase().startsWith(query.toLowerCase())) {
-          const completion = currentSug.slice(query.length);
-          currentGhostText = completion;
-          ghostEl.innerHTML = `<span style="color: transparent;">${escapeHtml(query)}</span><span class="search-ghost-text">${escapeHtml(completion)}</span>`;
-        } else {
-          currentGhostText = '';
-          ghostEl.innerHTML = '';
-        }
-      }
     }
 
     function escapeHtml(str) {
@@ -634,7 +597,7 @@
             if (allFetchedResults.length === 0) {
               resultsDiv.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">No results found.</div>';
             } else {
-              // Final filter and redraw
+              // Final filter and redraw altogether
               filterAndRenderResultsLocally(q);
             }
             return;
@@ -647,12 +610,9 @@
           }
 
           if (data.item) {
-            // Append this item to the cache instantly
+            // Append this item to the cache silently in the background
             const item = data.item;
             allFetchedResults.push(item);
-            
-            // Render the currently selected category items in real-time
-            filterAndRenderResultsLocally(q);
           }
         } catch (e) {
           console.error(e);
@@ -661,6 +621,11 @@
 
       eventSource.onerror = function() {
         eventSource.close();
+        if (allFetchedResults.length > 0) {
+          filterAndRenderResultsLocally(q);
+        } else {
+          resultsDiv.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">Connection closed.</div>';
+        }
       };
     }
 

@@ -1891,28 +1891,6 @@
       }
     }
 
-    /* ── Autocomplete Suggestions & Ghost Text Styles ── */
-    .search-ghost-overlay {
-      position: absolute;
-      left: 0;
-      top: 0;
-      width: 100%;
-      height: 100%;
-      padding: 15px 44px 15px 48px;
-      font-family: var(--font-inter);
-      font-size: 14px;
-      color: transparent;
-      pointer-events: none;
-      white-space: pre;
-      line-height: normal;
-      box-sizing: border-box;
-      border: 1px solid transparent;
-      z-index: 2;
-    }
-    
-    .search-ghost-text {
-      color: rgba(255, 255, 255, 0.22);
-    }
 
     .imdb-suggestions-dropdown {
       position: absolute;

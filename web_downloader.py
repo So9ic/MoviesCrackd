@@ -40,6 +40,9 @@ from env_loader import load_env_file, session_file_exists
 # Load environments
 load_env_file()
 
+# Shared server-side IMDb suggestion cache to serve queries in microseconds
+IMDB_SUGGEST_CACHE = {}
+
 # Core Scraper and Resolver imports
 try:
     from batch_episodes import resolve_link, scrape_links
@@ -1303,13 +1306,19 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.send_json([])
                 return
             
-            first_letter = query[0].lower() if query else 'a'
+            # Serve from microsecond server-side cache if present
+            query_lower = query.lower()
+            if query_lower in IMDB_SUGGEST_CACHE:
+                self.send_json(IMDB_SUGGEST_CACHE[query_lower])
+                return
+
+            first_letter = query_lower[0] if query_lower else 'a'
             # Check if it's alphanumeric or space to prevent potential directory traversal or malicious injection
             if not re.match(r'^[a-zA-Z0-9\s\-\:\.\'\,\!\&\(\)]+$', query):
                 self.send_json([])
                 return
 
-            safe_query = urllib.parse.quote(query.lower())
+            safe_query = urllib.parse.quote(query_lower)
             url = f"https://v3.sg.media-imdb.com/suggestion/{first_letter}/{safe_query}.json"
             try:
                 response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
@@ -1328,7 +1337,12 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                                 'type': item.get('q', 'Movie'),
                                 'image': item.get('i', {}).get('imageUrl')
                             })
-                    self.send_json(suggestions[:6])
+                    res_payload = suggestions[:6]
+                    # Cache the result to guarantee zero-latency responses for repeated typing/backspacing
+                    if len(IMDB_SUGGEST_CACHE) > 500:
+                        IMDB_SUGGEST_CACHE.clear()
+                    IMDB_SUGGEST_CACHE[query_lower] = res_payload
+                    self.send_json(res_payload)
                     return
             except Exception as e:
                 print(f"[!] Autocomplete proxy error: {e}", flush=True)
