@@ -1410,48 +1410,30 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.send_json(IMDB_SUGGEST_CACHE[query_lower])
                 return
 
-            first_letter = query_lower[0] if query_lower else 'a'
             # Check if it's alphanumeric or space to prevent potential directory traversal or malicious injection
             if not re.match(r'^[a-zA-Z0-9\s\-\:\.\'\,\!\&\(\)]+$', query):
                 self.send_json([])
                 return
 
             safe_query = urllib.parse.quote(query_lower)
-            url = f"https://v3.sg.media-imdb.com/suggestion/{first_letter}/{safe_query}.json"
+            url = f"https://v3.sg.media-imdb.com/suggestion/titles/x/{safe_query}.json"
             try:
                 response = SESSION.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=3)
                 if response.status_code == 200:
                     data = response.json()
-                    media_suggestions = []
-                    person_suggestions = []
+                    suggestions = []
                     for item in data.get('d', []):
                         if not item.get('l'):
                             continue
-                        qid = item.get('qid', '')
-                        item_id = item.get('id', '')
-                        is_media = qid in ('movie', 'tvSeries', 'tvMiniSeries', 'tvSpecial', 'tvMovie', 'videoGame') or item_id.startswith('tt')
-                        if is_media:
-                            media_suggestions.append({
-                                'id': item_id,
-                                'title': item.get('l'),
-                                'year': item.get('y'),
-                                'stars': item.get('s'),
-                                'type': item.get('q', 'Movie'),
-                                'image': item.get('i', {}).get('imageUrl')
-                            })
-                        elif item_id.startswith('nm'):
-                            # Person/celebrity — useful fallback when no titles match
-                            person_suggestions.append({
-                                'id': item_id,
-                                'title': item.get('l'),
-                                'year': None,
-                                'stars': item.get('s', ''),
-                                'type': 'Celebrity',
-                                'image': item.get('i', {}).get('imageUrl')
-                            })
-                    # Prefer media results; fall back to people if no media found
-                    suggestions = media_suggestions[:6] if media_suggestions else person_suggestions[:6]
-                    res_payload = suggestions
+                        suggestions.append({
+                            'id': item.get('id', ''),
+                            'title': item.get('l'),
+                            'year': item.get('y'),
+                            'stars': item.get('s'),
+                            'type': item.get('q', 'Movie'),
+                            'image': item.get('i', {}).get('imageUrl')
+                        })
+                    res_payload = suggestions[:6]
                     # LRU eviction: drop oldest entries instead of nuking entire cache
                     while len(IMDB_SUGGEST_CACHE) >= IMDB_SUGGEST_CACHE_MAX:
                         IMDB_SUGGEST_CACHE.popitem(last=False)
