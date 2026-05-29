@@ -263,6 +263,65 @@ def extract_download_options(detail_url):
                     "button_text": btn_text,
                     "url": href
                 })
+
+        # 2. Match unrendered or malformed WordPress [maxbutton] shortcodes
+        shortcode_matches = list(re.finditer(r'\[maxbutton[^\]]*url=["\'“”](https?://[^"\'“”]*/archives/\d+)', html, re.IGNORECASE))
+        for sm in shortcode_matches:
+            href = sm.group(1)
+            
+            start_pos = sm.start()
+            end_bracket = html.find(']', start_pos)
+            if end_bracket != -1 and end_bracket - start_pos < 500:
+                shortcode_block = html[start_pos:end_bracket+1]
+            else:
+                shortcode_block = html[start_pos:start_pos+300]
+                
+            text_match = re.search(r'text=["\'“”]([^"\'“”]+)["\'“”]', shortcode_block, re.IGNORECASE)
+            btn_text = text_match.group(1).strip() if text_match else "Download"
+            
+            lookback = html[max(0, start_pos - 800):start_pos]
+            headers = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', lookback, re.IGNORECASE | re.DOTALL)
+            
+            if headers:
+                header_text = re.sub(r'<[^>]+>', '', headers[-1]).strip()
+                header_text = re.sub(r'\s+', ' ', header_text)
+            else:
+                header_text = "Direct Download"
+                
+            if not any(opt["url"] == href for opt in options):
+                options.append({
+                    "quality": header_text,
+                    "button_text": btn_text,
+                    "url": href
+                })
+
+        # 3. Fallback: scan for any raw /archives/ links in text that might have been missed
+        raw_matches = list(re.finditer(r'(https?://[a-zA-Z0-9.-]+/archives/(\d+))', html, re.IGNORECASE))
+        for rm in raw_matches:
+            href = rm.group(1)
+            if any(opt["url"] == href for opt in options):
+                continue
+                
+            start_pos = rm.start()
+            lookback_small = html[max(0, start_pos - 100):start_pos]
+            if '<!--' in lookback_small or '<script' in lookback_small or '<style' in lookback_small:
+                continue
+                
+            btn_text = "Download"
+            lookback = html[max(0, start_pos - 800):start_pos]
+            headers = re.findall(r'<h[1-6][^>]*>(.*?)</h[1-6]>', lookback, re.IGNORECASE | re.DOTALL)
+            
+            if headers:
+                header_text = re.sub(r'<[^>]+>', '', headers[-1]).strip()
+                header_text = re.sub(r'\s+', ' ', header_text)
+            else:
+                header_text = "Direct Download"
+                
+            options.append({
+                "quality": header_text,
+                "button_text": btn_text,
+                "url": href
+            })
     except Exception as e:
         print(f"[-] Option extraction failed: {e}")
         
