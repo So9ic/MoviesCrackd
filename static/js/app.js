@@ -296,11 +296,6 @@
         }
 
         function onStart(clientX, clientY) {
-          // Clear any active mobile tap highlights on swipe/drag start
-          if (typeof resetActiveTappedCard === 'function') {
-            resetActiveTappedCard();
-          }
-
           isDragging = true;
           hasMoved = false;
           isScrolling = false;
@@ -340,6 +335,10 @@
           
           if (Math.abs(dx) > 5) {
             hasMoved = true;
+            // Clear any active mobile tap highlights only when a real swipe/drag gesture is detected
+            if (typeof resetActiveTappedCard === 'function') {
+              resetActiveTappedCard();
+            }
           }
           
           x = wrapOffset(startTranslate + dx);
