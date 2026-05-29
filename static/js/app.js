@@ -740,10 +740,28 @@
           // Hide global meta row — tags now live inside each season accordion
           if (metaRow) metaRow.style.display = 'none';
 
-          // 1. Group options by exact "quality" text first
+          // 1. Group options by exact "quality" text first, separating duplicates into separate rows
           const qualityGroups = {};
           data.options.forEach(opt => {
-            const key = opt.quality.trim();
+            const baseKey = opt.quality.trim();
+            let key = baseKey;
+            let counter = 1;
+
+            // Normalize button text to check for duplicates (e.g. "episode", "batch", "zip", etc.)
+            const btnTextLower = opt.button_text.toLowerCase();
+            const getBtnType = (txt) => {
+              if (txt.includes('zip') || txt.includes('batch') || txt.includes('pack')) return 'batch';
+              if (txt.includes('telegram')) return 'telegram';
+              return 'episode';
+            };
+            const btnType = getBtnType(btnTextLower);
+
+            // Find an existing group under this baseKey that does NOT already have this button type
+            while (qualityGroups[key] && qualityGroups[key].some(existingOpt => getBtnType(existingOpt.button_text.toLowerCase()) === btnType)) {
+              counter++;
+              key = `${baseKey} ##__DUP__## ${counter}`;
+            }
+
             if (!qualityGroups[key]) {
               qualityGroups[key] = [];
             }
@@ -753,7 +771,8 @@
           // 2. Now group these quality groups by their parsed "Season"
           const seasonGroups = {};
           Object.entries(qualityGroups).forEach(([quality, opts]) => {
-            const parsed = parseQualityTitle(quality);
+            const cleanQuality = quality.split(' ##__DUP__## ')[0];
+            const parsed = parseQualityTitle(cleanQuality);
             // Default season label if none parsed (e.g. for movies)
             const seasonName = parsed.season || "Complete Pack / Options";
             if (!seasonGroups[seasonName]) {
@@ -840,6 +859,52 @@
                   
                   <div class="option-middle-block">
                     <span class="pill-size">${parsed.size || 'N/A'}</span>
+                    ${(() => {
+                      const cleanQuality = item.quality.split(' ##__DUP__## ')[0];
+                      const isDup = item.quality.includes('##__DUP__##');
+                      const dupMatch = item.quality.match(/##__DUP__##\s*(\d+)/);
+                      const dupNum = dupMatch ? parseInt(dupMatch[1]) : 1;
+
+                      // Check if the movie title implies Colour and B&W versions
+                      const titleLower = document.getElementById('detail-title').innerText.toLowerCase();
+                      const hasColourAndBW = (titleLower.includes('colour') || titleLower.includes('color')) && 
+                                             (titleLower.includes('b&w') || titleLower.includes('bw') || titleLower.includes('black and white'));
+
+                      if (hasColourAndBW) {
+                        if (!isDup) {
+                          return `<span class="pill-size" style="background: rgba(168, 85, 247, 0.1); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.25); margin-left: 8px;">COLOUR Version</span>`;
+                        } else if (dupNum === 2) {
+                          return `<span class="pill-size" style="background: rgba(148, 163, 184, 0.1); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.25); margin-left: 8px;">B&W Version</span>`;
+                        }
+                      }
+                      
+                      // Fallback to Set 1 / Set 2 if it's just a general duplicate
+                      if (isDup) {
+                        return `<span class="pill-size" style="background: rgba(255, 255, 255, 0.05); color: var(--text-sub); border: 1px solid rgba(255, 255, 255, 0.1); margin-left: 8px;">Set ${dupNum}</span>`;
+                      } else {
+                        // Check if any other quality has a duplicate. If so, label this as Set 1
+                        const hasAnyDupForThisBase = Object.keys(qualityGroups).some(k => k.startsWith(cleanQuality) && k.includes('##__DUP__##'));
+                        if (hasAnyDupForThisBase) {
+                          return `<span class="pill-size" style="background: rgba(255, 255, 255, 0.05); color: var(--text-sub); border: 1px solid rgba(255, 255, 255, 0.1); margin-left: 8px;">Set 1</span>`;
+                        }
+                      }
+                      return '';
+                    })()}
+                    ${parsed.tags.map(tag => {
+                      const t = tag.toLowerCase();
+                      if (t.includes('10bit') || t.includes('x264') || t.includes('x265') || t.includes('hevc') || t.includes('colour') || t.includes('b&w') || t.includes('bw') || t.includes('msub')) {
+                        let badgeStyle = 'background: rgba(255, 255, 255, 0.05); color: var(--text-sub); border: 1px solid rgba(255, 255, 255, 0.1); margin-left: 8px;';
+                        if (t.includes('10bit')) {
+                          badgeStyle = 'background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.25); margin-left: 8px;';
+                        } else if (t.includes('x264')) {
+                          badgeStyle = 'background: rgba(245, 158, 11, 0.1); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.25); margin-left: 8px;';
+                        } else if (t.includes('hevc') || t.includes('x265')) {
+                          badgeStyle = 'background: rgba(168, 85, 247, 0.1); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.25); margin-left: 8px;';
+                        }
+                        return `<span class="pill-size" style="${badgeStyle}">${tag}</span>`;
+                      }
+                      return '';
+                    }).join('')}
                   </div>
 
                   <div class="divider-line"></div>
