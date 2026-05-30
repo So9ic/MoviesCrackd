@@ -3,6 +3,7 @@
     let isCloudMode = false;
     let isResolvingNewDownload = false;
     let activeSearchController = null;
+    let activeSearchEventSource = null;
     let downloadsInterval = null;
     let allFetchedResults = [];
     let lastSearchQuery = '';
@@ -909,16 +910,21 @@
       detailPanel.style.display = 'none';
       resultsDiv.style.display = 'grid';
 
+      // Instantly kill and abort any active search stream and controllers
+      if (activeSearchController) {
+        activeSearchController.abort();
+        activeSearchController = null;
+      }
+      if (activeSearchEventSource) {
+        activeSearchEventSource.close();
+        activeSearchEventSource = null;
+      }
+
       if (q.length < 2) {
         allFetchedResults = [];
         lastSearchQuery = '';
         renderTrendingShowcase();
         return;
-      }
-
-      // Abort active streaming search request
-      if (activeSearchController) {
-        activeSearchController.abort();
       }
 
       // Reset and track new query
@@ -952,11 +958,12 @@
       const url = `/api/search/stream?q=${encodeURIComponent(q)}&cat=All`;
 
       // Connect using Server-Sent Events for concurrent realtime streaming!
-      const eventSource = new EventSource(url);
+      activeSearchEventSource = new EventSource(url);
       
-      eventSource.onmessage = function(event) {
+      activeSearchEventSource.onmessage = function(event) {
         if (signal.aborted) {
-          eventSource.close();
+          activeSearchEventSource.close();
+          activeSearchEventSource = null;
           return;
         }
         
@@ -964,7 +971,10 @@
           const data = JSON.parse(event.data);
           
           if (data.status === 'done') {
-            eventSource.close();
+            if (activeSearchEventSource) {
+              activeSearchEventSource.close();
+              activeSearchEventSource = null;
+            }
             if (allFetchedResults.length === 0) {
               resultsDiv.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">No results found.</div>';
             } else {
@@ -977,7 +987,10 @@
           }
 
           if (data.status === 'error') {
-            eventSource.close();
+            if (activeSearchEventSource) {
+              activeSearchEventSource.close();
+              activeSearchEventSource = null;
+            }
             resultsDiv.innerHTML = `<div style="grid-column: 1/-1; text-align: center; color: var(--crimson); padding: 40px;">Error: ${data.message}</div>`;
             return;
           }
@@ -992,8 +1005,11 @@
         }
       };
 
-      eventSource.onerror = function() {
-        eventSource.close();
+      activeSearchEventSource.onerror = function() {
+        if (activeSearchEventSource) {
+          activeSearchEventSource.close();
+          activeSearchEventSource = null;
+        }
         if (allFetchedResults.length > 0) {
           filterAndRenderResultsLocally(q);
         } else {
