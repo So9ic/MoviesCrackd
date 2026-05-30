@@ -619,9 +619,9 @@
     function saveSuggestionsToLocalStorage() {
       try {
         const keys = Object.keys(suggestionsClientCache);
-        if (keys.length > 300) {
-          // Keep cache size bounded: evict oldest 50 items
-          for (let i = 0; i < 50; i++) {
+        if (keys.length > 2000) {
+          // Keep cache size bounded: evict oldest 200 items
+          for (let i = 0; i < 200; i++) {
             delete suggestionsClientCache[keys[i]];
           }
         }

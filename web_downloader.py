@@ -44,7 +44,7 @@ load_env_file()
 import hashlib
 from collections import OrderedDict
 IMDB_SUGGEST_CACHE = OrderedDict()
-IMDB_SUGGEST_CACHE_MAX = 1000
+IMDB_SUGGEST_CACHE_MAX = 50000
 
 # Persistent Disk Cache configuration
 IMDB_SUGGEST_CACHE_FILE = os.path.join('static', 'imdb_suggest_cache.json')
