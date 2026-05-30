@@ -1478,6 +1478,95 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             self.send_json([])
             return
 
+        # 4d. Diagnostics & Storage Stats
+        if parsed.path == '/api/storage-stats':
+            try:
+                # 1. Total cached posters count and size
+                cached_posters_count = 0
+                cached_posters_size = 0
+                if os.path.exists(IMG_PROXY_DIR):
+                    for entry in os.scandir(IMG_PROXY_DIR):
+                        if entry.is_file():
+                            cached_posters_count += 1
+                            cached_posters_size += entry.stat().st_size
+
+                # 2. IMDb autocomplete cache size
+                imdb_suggest_cache_count = len(IMDB_SUGGEST_CACHE)
+                imdb_suggest_cache_size = 0
+                if os.path.exists(IMDB_SUGGEST_CACHE_FILE):
+                    imdb_suggest_cache_size = os.path.getsize(IMDB_SUGGEST_CACHE_FILE)
+
+                # 3. Trending cache size
+                trending_cache_size = 0
+                if os.path.exists(TRENDING_CACHE_FILE):
+                    trending_cache_size = os.path.getsize(TRENDING_CACHE_FILE)
+
+                # 4. Total project folder size (computed fast skip massive dotfiles/venv)
+                total_project_size = 0
+                for root, dirs, files in os.walk('.'):
+                    if '.venv' in root or 'node_modules' in root or '.git' in root or '.gemini' in root:
+                        continue
+                    for f in files:
+                        fp = os.path.join(root, f)
+                        try:
+                            if os.path.exists(fp):
+                                total_project_size += os.path.getsize(fp)
+                        except Exception:
+                            pass
+
+                # Helper to format bytes
+                def format_size(bytes_size):
+                    for unit in ['B', 'KB', 'MB', 'GB']:
+                        if bytes_size < 1024.0:
+                            return f"{bytes_size:.2f} {unit}"
+                        bytes_size /= 1024.0
+                    return f"{bytes_size:.2f} TB"
+
+                stats = {
+                    "cached_posters_count": cached_posters_count,
+                    "cached_posters_size": format_size(cached_posters_size),
+                    "imdb_suggest_cache_count": imdb_suggest_cache_count,
+                    "imdb_suggest_cache_size": format_size(imdb_suggest_cache_size),
+                    "trending_cache_size": format_size(trending_cache_size),
+                    "total_project_size": format_size(total_project_size),
+                    "server_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                }
+                self.send_json(stats)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            return
+
+        # 4e. Clear Server Cache
+        if parsed.path == '/api/clear-server-cache':
+            try:
+                # Clear in-memory suggestions
+                IMDB_SUGGEST_CACHE.clear()
+                # Delete suggestion database file
+                if os.path.exists(IMDB_SUGGEST_CACHE_FILE):
+                    try:
+                        os.remove(IMDB_SUGGEST_CACHE_FILE)
+                    except Exception:
+                        pass
+
+                # Empty poster files
+                cleared_count = 0
+                if os.path.exists(IMG_PROXY_DIR):
+                    for entry in os.scandir(IMG_PROXY_DIR):
+                        if entry.is_file():
+                            try:
+                                os.remove(entry.path)
+                                cleared_count += 1
+                            except Exception:
+                                pass
+
+                self.send_json({
+                    "status": "success",
+                    "message": f"Successfully cleared IMDb suggestion cache database and deleted {cleared_count} cached posters from server SSD."
+                })
+            except Exception as e:
+                self.send_json({"status": "error", "message": str(e)}, 500)
+            return
+
         # 4c. Image Proxy — caches and serves IMDb poster thumbnails through the server
         if parsed.path == '/api/img-proxy':
             qs = parse_qs(parsed.query)

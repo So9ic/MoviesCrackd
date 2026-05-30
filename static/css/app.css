@@ -1979,17 +1979,162 @@
       font-size: 9.5px;
       font-weight: 300;
       color: #d6d6d6;
-      opacity: 0.45;
+      opacity: 0.35;
       letter-spacing: 0.3px;
-      pointer-events: none;
+      pointer-events: auto;
+      cursor: pointer;
       user-select: none;
       white-space: nowrap;
       z-index: 10;
+      transition: opacity 0.2s, transform 0.2s;
+    }
+    .credits-footer:hover {
+      opacity: 0.95;
+      transform: translateX(-50%) scale(1.02);
     }
     .credits-footer strong {
       font-size: 11px;
       font-weight: 600;
       color: #ffffff;
+    }
+
+    /* Premium Diagnostics Modal CSS */
+    .diagnostics-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 99999;
+      font-family: 'Inter', sans-serif;
+    }
+    .diagnostics-backdrop {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      animation: fadeIn 0.25s ease-out;
+    }
+    .diagnostics-content {
+      position: relative;
+      width: 90%;
+      max-width: 440px;
+      background: rgba(18, 18, 22, 0.95);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 16px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      overflow: hidden;
+      color: #ffffff;
+    }
+    .diagnostics-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 16px 20px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      background: rgba(255, 255, 255, 0.01);
+    }
+    .diagnostics-header h3 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      color: #ffffff;
+    }
+    .close-diag-btn {
+      background: none;
+      border: none;
+      color: #9f9f9f;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 0;
+      line-height: 1;
+      transition: color 0.15s;
+    }
+    .close-diag-btn:hover {
+      color: #ffffff;
+    }
+    .diagnostics-body {
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .diag-section {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 10px;
+      padding: 14px;
+    }
+    .diag-section h4 {
+      margin: 0 0 10px 0;
+      font-size: 10.5px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: #3b82f6;
+    }
+    .diag-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12.5px;
+      padding: 5px 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+    }
+    .diag-row:last-child {
+      border-bottom: none;
+    }
+    .diag-row span {
+      color: #a0aec0;
+    }
+    .diag-row strong {
+      color: #e2e8f0;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .diag-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 5px;
+    }
+    .diag-btn {
+      width: 100%;
+      border: none;
+      padding: 10px;
+      font-size: 12.5px;
+      font-weight: 550;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .diag-btn:active {
+      transform: scale(0.98);
+    }
+    .server-btn {
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #f87171;
+    }
+    .server-btn:hover {
+      background: rgba(239, 68, 68, 0.2);
+    }
+    .client-btn {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: #e2e8f0;
+    }
+    .client-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
     }
 
     /* Suggestion Skeleton Loader */

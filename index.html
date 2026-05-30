@@ -132,7 +132,39 @@
 
   </div>
 
-  <div class="credits-footer">© 2026 Developed by <strong>Anurag</strong>.</div>
+  <div class="credits-footer" onclick="openDiagnostics()">© 2026 Developed by <strong>Anurag</strong>.</div>
+
+  <!-- Premium System Diagnostics Modal -->
+  <div id="diagnostics-modal" class="diagnostics-modal" style="display: none;">
+    <div class="diagnostics-backdrop" onclick="closeDiagnostics()"></div>
+    <div class="diagnostics-content">
+      <div class="diagnostics-header">
+        <h3>📊 System Diagnostics & Storage</h3>
+        <button class="close-diag-btn" onclick="closeDiagnostics()">&times;</button>
+      </div>
+      <div class="diagnostics-body">
+        <div class="diag-section">
+          <h4>🌐 Server SSD Storage (Render Free Tier)</h4>
+          <div class="diag-row"><span>Total Project Files Size:</span><strong id="diag-project-size">Loading…</strong></div>
+          <div class="diag-row"><span>IMDb Autocomplete suggestions:</span><strong id="diag-server-suggest">Loading…</strong></div>
+          <div class="diag-row"><span>Cached JPEG Posters:</span><strong id="diag-server-posters">Loading…</strong></div>
+          <div class="diag-row"><span>Trending Showcase Database:</span><strong id="diag-trending-cache">Loading…</strong></div>
+          <div class="diag-row"><span>Server Runtime Clock:</span><strong id="diag-server-time">Loading…</strong></div>
+        </div>
+        
+        <div class="diag-section">
+          <h4>📱 Client Browser Cache (localStorage)</h4>
+          <div class="diag-row"><span>IMDb Autocomplete Entries:</span><strong id="diag-client-suggest">Loading…</strong></div>
+          <div class="diag-row"><span>Total Client Cache Usage:</span><strong id="diag-client-size">Loading…</strong></div>
+        </div>
+        
+        <div class="diag-actions">
+          <button class="diag-btn server-btn" onclick="clearServerCache()">🧹 Clear Server SSD Cache</button>
+          <button class="diag-btn client-btn" onclick="clearClientCache()">📱 Clear Client Local Cache</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script src="/static/js/app.js"></script>
 </body>
