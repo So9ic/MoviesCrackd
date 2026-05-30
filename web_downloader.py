@@ -575,20 +575,6 @@ class DownloaderBackend:
                         card.item_data = item
                         card.url = item["download_url"]
 
-                        # Log the resolved direct link/download link instantly
-                        uid = self.client_id if self.client_id else "anonymous"
-                        active_title = getattr(self, 'active_title', 'Direct URL Input')
-                        clean_title = clean_log_title(active_title)
-                        dl_url = item["download_url"]
-                        method = item.get("method", "")
-                        
-                        event_msg = (
-                            f"👤 {uid:<10} | ⚙️ RESOLVED  | \"{clean_title}\"\n"
-                            f"├─► Filename: \"{fname}\"\n"
-                            f"├─► Method: \"{method}\"\n"
-                            f"└─► Direct Link: {dl_url}"
-                        )
-                        log_instant_event(event_msg)
 
                         if fname in existing:
                             card.set_detail("Already downloaded")
@@ -1422,7 +1408,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"Error reading logs: {e}".encode('utf-8'))
             return
 
-        # 1c-3. Record search log silently for cached local searches & details page views
+        # 1c-3. Record search log silently for cached local searches & details page views & clicks
         if parsed.path == '/api/logs/record':
             qs = parse_qs(parsed.query)
             log_type = qs.get("type", ["search"])[0]
@@ -1436,6 +1422,16 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     clean_title = clean_log_title(title)
                     event_msg = f"👤 {uid:<10} | ℹ️ DETAILS   | \"{clean_title}\"\n└─► Source Page: {url}"
                     log_instant_event(event_msg)
+            elif log_type == "device_download":
+                title = qs.get("title", [""])[0].strip()
+                url = qs.get("url", [""])[0].strip()
+                uid = client_id if client_id else "anonymous"
+                clean_title = clean_log_title(title)
+                event_msg = (
+                    f"👤 {uid:<10} | ☁️ CLOUD DL   | \"{clean_title}\"\n"
+                    f"└─► Direct Link: {url}"
+                )
+                log_instant_event(event_msg)
             else:
                 query = qs.get("q", [""])[0].strip()
                 if query:

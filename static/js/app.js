@@ -1895,6 +1895,12 @@
       startDownload(encodeURIComponent(url));
     }
 
+    function logDeviceDownload(filename, url) {
+      const decodedFilename = decodeURIComponent(filename);
+      const decodedUrl = decodeURIComponent(url);
+      fetch(`/api/logs/record?type=device_download&title=${encodeURIComponent(decodedFilename)}&url=${encodeURIComponent(decodedUrl)}&clientId=${encodeURIComponent(getOrCreateClientId())}`).catch(() => {});
+    }
+
     // Polling Downloads status
     function pollDownloads() {
       if (activeTab !== 'direct') return; // only poll active view
@@ -1932,13 +1938,13 @@
               // Completed with resolved URL — show download button
               if (dl.size) {
                 rightContent = `
-                  <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
+                  <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned" onclick="logDeviceDownload('${encodeURIComponent(dl.filename)}', '${encodeURIComponent(dl.resolved_url)}')">
                     <span class="dl-btn-left">☁ Download to Device</span>
                     <span class="dl-btn-right">(${dl.size})</span>
                   </a>
                 `;
               } else {
-                rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
+                rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn" onclick="logDeviceDownload('${encodeURIComponent(dl.filename)}', '${encodeURIComponent(dl.resolved_url)}')">☁ Download to Device</a>`;
               }
             } else if (dl.state === 3) {
               // Failed — show retry button
