@@ -74,6 +74,28 @@ def save_imdb_suggest_cache_to_file():
     except Exception as e:
         print(f"[-] Failed to save IMDb suggestion cache to disk: {e}", flush=True)
 
+# Search Logging Configuration
+SEARCH_LOGS_FILE = "search_logs.txt"
+LOG_LOCK = threading.Lock()
+
+def log_search_query(query):
+    """Log search query with an IST timestamp into a persistent text file."""
+    if not query:
+        return
+    try:
+        import datetime
+        utc_now = datetime.datetime.utcnow()
+        ist_offset = datetime.timedelta(hours=5, minutes=30)
+        ist_now = utc_now + ist_offset
+        timestamp = ist_now.strftime("%Y-%m-%d %H:%M:%S")
+        log_line = f"[{timestamp} IST] {query}\n"
+        
+        with LOG_LOCK:
+            with open(SEARCH_LOGS_FILE, 'a', encoding='utf-8') as f:
+                f.write(log_line)
+    except Exception as e:
+        print(f"[-] Error writing search logs: {e}", flush=True)
+
 # Core Scraper and Resolver imports
 try:
     from batch_episodes import resolve_link, scrape_links
@@ -1272,6 +1294,26 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # 1c-2. Search Logs display endpoint (Latest logs at the top)
+        if parsed.path == '/logs' or parsed.path == '/api/logs':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.end_headers()
+            try:
+                if os.path.exists(SEARCH_LOGS_FILE):
+                    with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    # Reverse so that latest logs are at the top
+                    reversed_lines = reversed(lines)
+                    self.wfile.write("".join(reversed_lines).encode('utf-8'))
+                else:
+                    self.wfile.write(b"No search logs found yet.")
+            except Exception as e:
+                self.wfile.write(f"Error reading logs: {e}".encode('utf-8'))
+            return
+
         # 1d. Serve static CSS, JS, images, etc. dynamically from the static directory with long-term caching
         if parsed.path.startswith('/static/'):
             local_path = parsed.path.lstrip('/')
@@ -1634,6 +1676,9 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             query = qs.get("q", [""])[0].strip()
             category = qs.get("cat", ["All"])[0]
+
+            # Log search term to persistent disk logs securely (with IST timestamp)
+            log_search_query(query)
 
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
