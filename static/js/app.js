@@ -9,6 +9,16 @@
     let lastSearchQuery = '';
     let trendingMoviesList = [];
 
+    function getOrCreateClientId() {
+      let id = localStorage.getItem('moviescrackd_client_id');
+      if (!id) {
+        const rand = Math.floor(1000 + Math.random() * 9000).toString(16);
+        id = `user-${rand}`;
+        localStorage.setItem('moviescrackd_client_id', id);
+      }
+      return id;
+    }
+
     // 1-week TTL search result cache using localStorage
     const SEARCH_CACHE_PREFIX = 'mcrackd_search_';
     const SEARCH_CACHE_TTL = 7 * 24 * 60 * 60 * 1000; // 1 week in ms
@@ -1023,7 +1033,7 @@
       activeSearchController = new AbortController();
       const signal = activeSearchController.signal;
       // We always request 'All' categories from the server to cache them for instantaneous switching!
-      const url = `/api/search/stream?q=${encodeURIComponent(q)}&cat=All`;
+      const url = `/api/search/stream?q=${encodeURIComponent(q)}&cat=All&clientId=${encodeURIComponent(getOrCreateClientId())}`;
 
       // Connect using Server-Sent Events for concurrent realtime streaming!
       activeSearchEventSource = new EventSource(url);
@@ -1471,6 +1481,9 @@
 
       document.getElementById('detail-title').innerText = item.title;
       if (metaRow) metaRow.style.display = 'none';
+
+      // Log movie details page view dynamically with persistent Client ID
+      fetch(`/api/logs/record?type=detail&title=${encodeURIComponent(item.title)}&url=${encodeURIComponent(item.url)}&clientId=${encodeURIComponent(getOrCreateClientId())}`).catch(() => {});
       
       // Render loader inside details list
       optionList.innerHTML = Array.from({length: 3}).map(() => `
@@ -1607,7 +1620,7 @@
                 }
 
                 return `
-                  <button class="option-dl-btn ${btnClass}" style="${inlineStyle}" ${hoverAttributes} onclick="startDownload('${encodeURIComponent(opt.url)}')">
+                  <button class="option-dl-btn ${btnClass}" style="${inlineStyle}" ${hoverAttributes} onclick="startDownload('${encodeURIComponent(opt.url)}', '${encodeURIComponent(item.quality)}', '${encodeURIComponent(opt.button_text)}')">
                     <span class="btn-icon">${icon}</span>
                     ${opt.button_text}
                   </button>
@@ -1818,11 +1831,11 @@
     }
 
     // Download API communication handlers
-    function startDownload(url) {
+    function startDownload(url, optionTitle, buttonText) {
       url = decodeURIComponent(url);
       isResolvingNewDownload = true;
 
-      // Clear the downloads list UI immediately with beautiful skeleton placeholders so they don't see old downloads
+      // Clear the downloads list UI immediately with beautiful skeleton placeholders
       const list = document.getElementById('downloads-list');
       if (list) {
         list.innerHTML = Array.from({length: 3}).map(() => `
@@ -1836,13 +1849,21 @@
         `).join('');
       }
 
+      const activeTitle = document.getElementById('detail-title').innerText || 'Direct URL Input';
+      const postBody = {
+        url: url,
+        clientId: getOrCreateClientId(),
+        title: activeTitle,
+        optionTitle: optionTitle ? decodeURIComponent(optionTitle) : '',
+        buttonText: buttonText ? decodeURIComponent(buttonText) : ''
+      };
+
       if (isCloudMode) {
-        // Skip folder chooser in cloud mode
         showDirectFromDetails();
         fetch('/api/download', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: url, output_dir: 'cloud' })
+          body: JSON.stringify({ ...postBody, output_dir: 'cloud' })
         });
         return;
       }
@@ -1857,13 +1878,12 @@
             return;
           }
           
-          // Switch to Direct URL tab immediately to watch downloads progress
           showDirectFromDetails();
           
           fetch('/api/download', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url: url, output_dir: folderData.path })
+            body: JSON.stringify({ ...postBody, output_dir: folderData.path })
           });
         });
     }

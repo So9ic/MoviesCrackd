@@ -82,6 +82,13 @@ DEBOUNCE_TIMER = None
 DEBOUNCE_QUERY = None
 DEBOUNCE_LOCK = threading.Lock()
 
+def get_ist_timestamp():
+    import datetime
+    utc_now = datetime.datetime.utcnow()
+    ist_offset = datetime.timedelta(hours=5, minutes=30)
+    ist_now = utc_now + ist_offset
+    return ist_now.strftime("%Y-%m-%d %H:%M:%S")
+
 def write_debounced_log():
     """Timer callback to write the final stabilized query to the search logs file."""
     global DEBOUNCE_QUERY
@@ -92,11 +99,7 @@ def write_debounced_log():
             
         if query_to_write:
             os.makedirs(os.path.dirname(SEARCH_LOGS_FILE), exist_ok=True)
-            import datetime
-            utc_now = datetime.datetime.utcnow()
-            ist_offset = datetime.timedelta(hours=5, minutes=30)
-            ist_now = utc_now + ist_offset
-            timestamp = ist_now.strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = get_ist_timestamp()
             log_line = f"[{timestamp} IST] {query_to_write}\n"
             
             with LOG_LOCK:
@@ -105,24 +108,38 @@ def write_debounced_log():
     except Exception as e:
         print(f"[-] Error writing search logs: {e}", flush=True)
 
-def log_search_query(query):
+def log_search_query(query, client_id=None):
     """Log search query with an IST timestamp using a thread-safe debounce timer to filter typing sequence clutter."""
     global DEBOUNCE_TIMER, DEBOUNCE_QUERY
     if not query or len(query.strip()) < 2:
         return
         
     query_str = query.strip()
+    user_prefix = f"[User: {client_id}] " if client_id else ""
+    formatted_msg = f"{user_prefix}SEARCHED: \"{query_str}\""
     
     with DEBOUNCE_LOCK:
         # Cancel any pending log timer
         if DEBOUNCE_TIMER is not None:
             DEBOUNCE_TIMER.cancel()
             
-        DEBOUNCE_QUERY = query_str
+        DEBOUNCE_QUERY = formatted_msg
         
         # Start a new timer for 1.8 seconds (giving the user plenty of time to finish typing)
         DEBOUNCE_TIMER = threading.Timer(1.8, write_debounced_log)
         DEBOUNCE_TIMER.start()
+
+def log_instant_event(event_message):
+    """Write an instant event with an IST timestamp to the logs file immediately and thread-safely."""
+    try:
+        os.makedirs(os.path.dirname(SEARCH_LOGS_FILE), exist_ok=True)
+        timestamp = get_ist_timestamp()
+        log_line = f"[{timestamp} IST] {event_message}\n"
+        with LOG_LOCK:
+            with open(SEARCH_LOGS_FILE, 'a', encoding='utf-8') as f:
+                f.write(log_line)
+    except Exception as e:
+        print(f"[-] Error writing instant search log: {e}", flush=True)
 
 # Core Scraper and Resolver imports
 try:
@@ -1342,12 +1359,22 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"Error reading logs: {e}".encode('utf-8'))
             return
 
-        # 1c-3. Record search log silently for cached local searches
+        # 1c-3. Record search log silently for cached local searches & details page views
         if parsed.path == '/api/logs/record':
             qs = parse_qs(parsed.query)
-            query = qs.get("q", [""])[0].strip()
-            if query:
-                log_search_query(query)
+            log_type = qs.get("type", ["search"])[0]
+            client_id = qs.get("clientId", [None])[0]
+            
+            if log_type == "detail":
+                title = qs.get("title", [""])[0].strip()
+                url = qs.get("url", [""])[0].strip()
+                if title:
+                    log_instant_event(f"[User: {client_id}] VIEWED DETAILS: \"{title}\" ({url})")
+            else:
+                query = qs.get("q", [""])[0].strip()
+                if query:
+                    log_search_query(query, client_id=client_id)
+                    
             self.send_response(200)
             self.send_header('Content-Type', 'text/plain')
             self.send_header('Access-Control-Allow-Origin', '*')
@@ -1717,9 +1744,10 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             query = qs.get("q", [""])[0].strip()
             category = qs.get("cat", ["All"])[0]
+            client_id = qs.get("clientId", [None])[0]
 
             # Log search term to persistent disk logs securely (with IST timestamp)
-            log_search_query(query)
+            log_search_query(query, client_id=client_id)
 
             self.send_response(200)
             self.send_header('Content-Type', 'text/event-stream')
@@ -1836,6 +1864,19 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 if not url:
                     self.send_json({"error": "Missing url body param"}, 400)
                     return
+
+                # Parse download telemetry parameters
+                client_id = data.get("clientId")
+                title = data.get("title", "Direct URL")
+                option_title = data.get("optionTitle", "")
+                button_text = data.get("buttonText", "")
+
+                # Record detailed user journey log instantly
+                if option_title or button_text:
+                    event_msg = f"[User: {client_id}] DOWNLOAD INITIATED: \"{title}\" -> Selection: \"{option_title}\" | Button: \"{button_text}\" (URL: {url})"
+                else:
+                    event_msg = f"[User: {client_id}] DOWNLOAD INITIATED: \"{title}\" (URL: {url})"
+                log_instant_event(event_msg)
 
                 DOWNLOAD_MGR.start_pipeline(url, output_dir)
                 self.send_json({"status": "success", "message": "Pipeline initiated"})
