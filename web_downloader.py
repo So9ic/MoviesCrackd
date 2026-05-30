@@ -75,7 +75,7 @@ def save_imdb_suggest_cache_to_file():
         print(f"[-] Failed to save IMDb suggestion cache to disk: {e}", flush=True)
 
 # Search Logging Configuration
-SEARCH_LOGS_FILE = "search_logs.txt"
+SEARCH_LOGS_FILE = os.path.join('static', 'search_logs.txt')
 LOG_LOCK = threading.Lock()
 
 def log_search_query(query):
@@ -83,6 +83,7 @@ def log_search_query(query):
     if not query:
         return
     try:
+        os.makedirs(os.path.dirname(SEARCH_LOGS_FILE), exist_ok=True)
         import datetime
         utc_now = datetime.datetime.utcnow()
         ist_offset = datetime.timedelta(hours=5, minutes=30)

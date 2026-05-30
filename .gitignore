@@ -13,5 +13,5 @@ banner_optimized.jpg
 pinger-js/
 .wrangler/
 static/thumbnail_cache/
-search_logs.txt
+static/search_logs.txt
 static/cached_posters/
