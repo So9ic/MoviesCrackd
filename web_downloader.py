@@ -40,6 +40,8 @@ from env_loader import load_env_file, session_file_exists
 # Load environments
 load_env_file()
 
+START_TIME = time.time()
+
 # Shared server-side IMDb suggestion LRU cache (OrderedDict for efficient eviction)
 import hashlib
 from collections import OrderedDict
@@ -87,7 +89,7 @@ def get_ist_timestamp():
     utc_now = datetime.datetime.utcnow()
     ist_offset = datetime.timedelta(hours=5, minutes=30)
     ist_now = utc_now + ist_offset
-    return ist_now.strftime("%Y-%m-%d %H:%M:%S")
+    return ist_now.strftime("%Y-%m-%d %I:%M:%S %p")
 
 def clean_log_title(title):
     """Strip bracket tags, resolutions, and size descriptors to produce beautiful clean movie titles."""
@@ -1538,7 +1540,16 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 <body>
     <div class="ambient-glow"></div>
     <div class="login-card">
-        <span class="logo-mark">📊</span>
+        <svg class="lock-icon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="url(#lock-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom: 20px; display: inline-block;">
+            <defs>
+                <linearGradient id="lock-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#a855f7" />
+                    <stop offset="100%" stop-color="#6366f1" />
+                </linearGradient>
+            </defs>
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
         <h2>Admin Authentication</h2>
         <p class="subtitle">Access is restricted to system administrators</p>
         
@@ -1593,6 +1604,10 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         self.wfile.write(html_code.encode('utf-8'))
 
     def serve_stats_page(self):
+        self.send_response(302)
+        self.send_header('Location', '/admin')
+        self.end_headers()
+        return
         html_code = """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1827,7 +1842,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             <button class="action-btn client-btn" onclick="clearClientCache()">🗑 Clear Client Cache</button>
         </div>
         
-        <button class="view-logs-btn" onclick="window.location.href='/logs'">📋 Open System Activity Logs</button>
+        <button class="view-logs-btn" onclick="window.location.href='/admin'">📋 Open System Activity Logs</button>
     </div>
 
     <script>
@@ -1918,13 +1933,13 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html_code.encode('utf-8'))
 
-    def serve_logs_page(self, logs_json):
+    def serve_admin_page(self, logs_json):
         html_code = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MoviesCrackd - Admin Logs</title>
+    <title>MoviesCrackd - Admin Panel</title>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {{
@@ -2279,6 +2294,132 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         main::-webkit-scrollbar-thumb:hover {{
             background: rgba(255,255,255,0.15);
         }}
+
+        /* Modal Overlay CSS styling */
+        .modal-backdrop {{
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(8, 11, 17, 0.75);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            z-index: 100;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.25s ease;
+        }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; }}
+            to {{ opacity: 1; }}
+        }}
+        .modal-card {{
+            background: rgba(17, 24, 39, 0.85);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            padding: 35px;
+            width: 90%;
+            max-width: 580px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.6);
+            position: relative;
+            text-align: center;
+            animation: scaleIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+        }}
+        @keyframes scaleIn {{
+            from {{ opacity: 0; transform: scale(0.95); }}
+            to {{ opacity: 1; transform: scale(1); }}
+        }}
+        .modal-close {{
+            position: absolute;
+            top: 20px;
+            right: 24px;
+            background: transparent;
+            border: none;
+            color: var(--text-sub);
+            font-size: 28px;
+            cursor: pointer;
+            line-height: 1;
+            transition: color 0.2s ease;
+        }}
+        .modal-close:hover {{
+            color: var(--text-main);
+        }}
+        .modal-header {{
+            margin-bottom: 25px;
+            text-align: left;
+        }}
+        .modal-header h3 {{
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 4px;
+        }}
+        .modal-header p {{
+            font-size: 13px;
+            color: var(--text-sub);
+        }}
+        .stats-grid {{
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin-bottom: 25px;
+        }}
+        .stat-box {{
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 14px;
+            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 6px;
+            text-align: left;
+        }}
+        .stat-label {{
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-sub);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .stat-value {{
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-main);
+        }}
+        .modal-actions {{
+            display: flex;
+            gap: 12px;
+            margin-top: 10px;
+        }}
+        .action-btn {{
+            flex: 1;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 1px solid var(--border-color);
+        }}
+        .action-btn.server-btn {{
+            background: rgba(168, 85, 247, 0.1);
+            border-color: rgba(168, 85, 247, 0.3);
+            color: #c084fc;
+        }}
+        .action-btn.server-btn:hover {{
+            background: rgba(168, 85, 247, 0.18);
+        }}
+        .action-btn.client-btn {{
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-sub);
+        }}
+        .action-btn.client-btn:hover {{
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-main);
+        }}
     </style>
 </head>
 <body>
@@ -2296,7 +2437,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         </div>
         <div class="header-right">
             <button class="btn" onclick="window.location.reload()">🔄 Refresh</button>
-            <button class="btn" onclick="window.location.href='/stats'">📊 Stats</button>
+            <button class="btn" onclick="window.showStatsModal()">📊 Stats</button>
             <button class="btn accent" onclick="window.location.href='/'">Go Home</button>
         </div>
     </header>
@@ -2312,6 +2453,55 @@ class APIRequestHandler(BaseHTTPRequestHandler):
     <main>
         <div class="logs-wrapper" id="logs-container"></div>
     </main>
+
+    <!-- Verbose Diagnostics Stat Modal -->
+    <div class="modal-backdrop" id="stats-modal">
+        <div class="modal-card">
+            <button class="modal-close" onclick="window.hideStatsModal()">&times;</button>
+            <div class="modal-header">
+                <h3>📊 Server Diagnostics</h3>
+                <p>Real-time system telemetry and storage footprint</p>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-box">
+                    <span class="stat-label">Server Time</span>
+                    <span class="stat-value" id="stat-server-time">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Uptime</span>
+                    <span class="stat-value" id="stat-uptime">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Active Sessions</span>
+                    <span class="stat-value" id="stat-sessions">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Process ID</span>
+                    <span class="stat-value" id="stat-pid">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Total Log Events</span>
+                    <span class="stat-value" id="stat-events">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Cached Posters</span>
+                    <span class="stat-value" id="stat-posters">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">Autocomplete Db</span>
+                    <span class="stat-value" id="stat-autodb">-</span>
+                </div>
+                <div class="stat-box">
+                    <span class="stat-label">System Environment</span>
+                    <span class="stat-value" id="stat-env" style="font-size: 11px;">-</span>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button class="action-btn server-btn" id="server-btn" onclick="clearServerCache()">Wipe Server Cache</button>
+                <button class="action-btn client-btn" onclick="clearClientCache()">Wipe Client Cache</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         const LOGS_DATA = {logs_json};
@@ -2460,6 +2650,67 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             }});
         }});
 
+        // Modal Overlay JavaScript functions
+        const modal = document.getElementById('stats-modal');
+
+        window.showStatsModal = function() {{
+            modal.style.display = 'flex';
+            loadStats();
+        }}
+
+        window.hideStatsModal = function() {{
+            modal.style.display = 'none';
+        }}
+
+        modal.addEventListener('click', (e) => {{
+            if (e.target === modal) {{
+                window.hideStatsModal();
+            }}
+        }});
+
+        function loadStats() {{
+            fetch('/api/storage-stats')
+                .then(res => res.json())
+                .then(data => {{
+                    if (data.error) return;
+                    document.getElementById('stat-server-time').innerText = data.server_time || '-';
+                    document.getElementById('stat-uptime').innerText = data.uptime || '-';
+                    document.getElementById('stat-sessions').innerText = data.admin_sessions_count || '0';
+                    document.getElementById('stat-pid').innerText = data.process_id || '-';
+                    document.getElementById('stat-events').innerText = data.total_events || '0';
+                    document.getElementById('stat-posters').innerText = `${{data.cached_posters_count}} files (${{data.cached_posters_size}})`;
+                    document.getElementById('stat-autodb').innerText = `${{data.imdb_suggest_cache_count}} items (${{data.imdb_suggest_cache_size}})`;
+                    document.getElementById('stat-env').innerText = `${{data.system_os}} | Python ${{data.python_version}}`;
+                }})
+                .catch(err => console.error("Error loading stats:", err));
+        }}
+
+        function clearServerCache() {{
+            if (!confirm("Are you sure you want to permanently clear the server-side suggestions cache and delete all cached posters from the SSD?")) return;
+            const btn = document.getElementById('server-btn');
+            btn.innerText = "Clearing...";
+            btn.disabled = true;
+            
+            fetch('/api/clear-server-cache')
+                .then(res => res.json())
+                .then(data => {{
+                    alert(data.message || "Server cache cleared successfully!");
+                    loadStats();
+                }})
+                .catch(err => alert("Failed to clear server cache: " + err))
+                .finally(() => {{
+                    btn.innerText = "Wipe Server Cache";
+                    btn.disabled = false;
+                }});
+        }}
+
+        function clearClientCache() {{
+            if (!confirm("Are you sure you want to delete all client-side browser suggestion caches?")) return;
+            localStorage.removeItem('mcrackd_imdb_suggestions');
+            alert("Client-side suggestions cache cleared successfully!");
+            loadStats();
+        }}
+
         renderLogs();
     </script>
 </body>
@@ -2484,7 +2735,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             return True
 
         parsed = urlparse(self.path)
-        if parsed.path == '/stats' or parsed.path == '/logs':
+        if parsed.path == '/admin':
             self.serve_login_page(parsed.path)
             return False
 
@@ -2537,11 +2788,28 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
-        # Serve secure /stats diagnostics page
-        if parsed.path == '/stats':
+        # Redirect obsolete paths to the unified /admin
+        if parsed.path == '/logs' or parsed.path == '/stats':
+            self.send_response(302)
+            self.send_header('Location', '/admin')
+            self.end_headers()
+            return
+
+        # Serve secure combined /admin panel page
+        if parsed.path == '/admin':
             if not self.check_admin_auth():
                 return
-            self.serve_stats_page()
+            
+            parsed_events = []
+            try:
+                if os.path.exists(SEARCH_LOGS_FILE):
+                    with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    parsed_events = parse_log_events(lines)
+            except Exception as e:
+                parsed_events = [{"timestamp": "", "username": "system", "action": "system error", "title": f"Error loading logs: {e}", "sublines": []}]
+            
+            self.serve_admin_page(json.dumps(parsed_events))
             return
 
         # 1c. Uptime compatibility ping endpoint for Cloudflare Monitor worker
@@ -2555,53 +2823,41 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # 1c-2. Search Logs display endpoint (Latest logs at the top, chronological lines inside each block)
-        if parsed.path == '/logs' or parsed.path == '/api/logs':
+        # Keep /api/logs raw plaintext endpoint intact for API metrics
+        if parsed.path == '/api/logs':
             if not self.check_admin_auth():
                 return
             
-            if parsed.path == '/api/logs':
-                raw_logs_content = ""
-                try:
-                    if os.path.exists(SEARCH_LOGS_FILE):
-                        with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
-                            lines = f.readlines()
-                        
-                        events = []
-                        current_event = []
-                        for line in lines:
-                            if line.startswith('['):
-                                if current_event:
-                                    events.append("".join(current_event))
-                                    current_event = []
-                            current_event.append(line)
-                        if current_event:
-                            events.append("".join(current_event))
-                        
-                        reversed_events = reversed(events)
-                        raw_logs_content = "".join(reversed_events)
-                    else:
-                        raw_logs_content = "No search logs found yet."
-                except Exception as e:
-                    raw_logs_content = f"Error reading logs: {e}"
+            raw_logs_content = ""
+            try:
+                if os.path.exists(SEARCH_LOGS_FILE):
+                    with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    
+                    events = []
+                    current_event = []
+                    for line in lines:
+                        if line.startswith('['):
+                            if current_event:
+                                events.append("".join(current_event))
+                                current_event = []
+                        current_event.append(line)
+                    if current_event:
+                        events.append("".join(current_event))
+                    
+                    reversed_events = reversed(events)
+                    raw_logs_content = "".join(reversed_events)
+                else:
+                    raw_logs_content = "No search logs found yet."
+            except Exception as e:
+                raw_logs_content = f"Error reading logs: {e}"
 
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-                self.end_headers()
-                self.wfile.write(raw_logs_content.encode('utf-8'))
-            else:
-                parsed_events = []
-                try:
-                    if os.path.exists(SEARCH_LOGS_FILE):
-                        with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
-                            lines = f.readlines()
-                        parsed_events = parse_log_events(lines)
-                except Exception as e:
-                    parsed_events = [{"timestamp": "", "username": "system", "action": "system error", "title": f"Error loading logs: {e}", "sublines": []}]
-                
-                self.serve_logs_page(json.dumps(parsed_events))
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+            self.end_headers()
+            self.wfile.write(raw_logs_content.encode('utf-8'))
             return
 
         # 1c-3. Record search log silently for cached local searches & details page views & clicks
@@ -2886,6 +3142,23 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         bytes_size /= 1024.0
                     return f"{bytes_size:.2f} TB"
 
+                import platform
+                import os
+                
+                uptime_seconds = int(time.time() - START_TIME)
+                hours = uptime_seconds // 3600
+                minutes = (uptime_seconds % 3600) // 60
+                seconds = uptime_seconds % 60
+                uptime_str = f"{hours}h {minutes}m {seconds}s"
+                
+                total_events = 0
+                if os.path.exists(SEARCH_LOGS_FILE):
+                    try:
+                        with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                            total_events = sum(1 for line in f if line.startswith('['))
+                    except Exception:
+                        pass
+
                 stats = {
                     "cached_posters_count": cached_posters_count,
                     "cached_posters_size": format_size(cached_posters_size),
@@ -2893,7 +3166,13 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     "imdb_suggest_cache_size": format_size(imdb_suggest_cache_size),
                     "trending_cache_size": format_size(trending_cache_size),
                     "total_project_size": format_size(total_project_size),
-                    "server_time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                    "server_time": get_ist_timestamp() + " IST",
+                    "admin_sessions_count": len(ADMIN_SESSIONS),
+                    "system_os": f"{platform.system()} {platform.machine()}",
+                    "python_version": platform.python_version(),
+                    "process_id": os.getpid(),
+                    "uptime": uptime_str,
+                    "total_events": total_events
                 }
                 self.send_json(stats)
             except Exception as e:
