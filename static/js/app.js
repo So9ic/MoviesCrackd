@@ -603,7 +603,32 @@
 
     let currentSuggestions = [];
     let activeSuggestionIndex = -1;
-    const suggestionsClientCache = {};
+    
+    // Persistent localStorage client cache for IMDb suggestions
+    const IMDB_SUGGESTIONS_CACHE_KEY = 'mcrackd_imdb_suggestions';
+    let suggestionsClientCache = {};
+    try {
+      const saved = localStorage.getItem(IMDB_SUGGESTIONS_CACHE_KEY);
+      if (saved) {
+        suggestionsClientCache = JSON.parse(saved);
+      }
+    } catch (e) {
+      suggestionsClientCache = {};
+    }
+
+    function saveSuggestionsToLocalStorage() {
+      try {
+        const keys = Object.keys(suggestionsClientCache);
+        if (keys.length > 300) {
+          // Keep cache size bounded: evict oldest 50 items
+          for (let i = 0; i < 50; i++) {
+            delete suggestionsClientCache[keys[i]];
+          }
+        }
+        localStorage.setItem(IMDB_SUGGESTIONS_CACHE_KEY, JSON.stringify(suggestionsClientCache));
+      } catch (e) {}
+    }
+
     let activeSuggestController = null;
 
     function clearSearch() {
@@ -741,6 +766,7 @@
           currentSuggestions = filtered;
           activeSuggestionIndex = -1;
           renderSuggestionsDropdown();
+          saveSuggestionsToLocalStorage();
           // DON'T return — also fire a background fetch to get exact results for this query
         }
       }
@@ -779,6 +805,7 @@
           }
           const finalResults = results.slice(0, 6);
           suggestionsClientCache[cacheKey] = finalResults;
+          saveSuggestionsToLocalStorage();
           
           // Only render if this is still the latest query (prevents older responses overwriting newer ones)
           const currentQuery = document.getElementById('search-box')?.value || '';
@@ -796,6 +823,7 @@
             .then(data => {
               const results = data || [];
               suggestionsClientCache[cacheKey] = results;
+              saveSuggestionsToLocalStorage();
               
               const currentQuery = document.getElementById('search-box')?.value || '';
               if (currentQuery.trim().toLowerCase() !== cacheKey) return;

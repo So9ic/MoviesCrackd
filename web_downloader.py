@@ -41,13 +41,38 @@ from env_loader import load_env_file, session_file_exists
 load_env_file()
 
 # Shared server-side IMDb suggestion LRU cache (OrderedDict for efficient eviction)
+import hashlib
 from collections import OrderedDict
 IMDB_SUGGEST_CACHE = OrderedDict()
-IMDB_SUGGEST_CACHE_MAX = 500
+IMDB_SUGGEST_CACHE_MAX = 1000
 
-# Server-side image proxy LRU cache for IMDb poster thumbnails
-IMG_PROXY_CACHE = OrderedDict()
-IMG_PROXY_CACHE_MAX = 1000
+# Persistent Disk Cache configuration
+IMDB_SUGGEST_CACHE_FILE = os.path.join('static', 'imdb_suggest_cache.json')
+IMG_PROXY_DIR = os.path.join('static', 'cached_posters')
+
+def load_imdb_suggest_cache_from_file():
+    """Load cached IMDb autocomplete suggestions from persistent disk on startup."""
+    global IMDB_SUGGEST_CACHE
+    try:
+        if os.path.exists(IMDB_SUGGEST_CACHE_FILE):
+            with open(IMDB_SUGGEST_CACHE_FILE, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    IMDB_SUGGEST_CACHE.clear()
+                    for k, v in loaded.items():
+                        IMDB_SUGGEST_CACHE[k] = v
+                    print(f"[+] Loaded {len(IMDB_SUGGEST_CACHE)} IMDb suggestion cache entries from persistent disk file.", flush=True)
+    except Exception as e:
+        print(f"[-] Failed to load persistent IMDb suggestion cache: {e}", flush=True)
+
+def save_imdb_suggest_cache_to_file():
+    """Save in-memory IMDb autocomplete suggestions cache to persistent disk."""
+    try:
+        os.makedirs(os.path.dirname(IMDB_SUGGEST_CACHE_FILE), exist_ok=True)
+        with open(IMDB_SUGGEST_CACHE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(dict(IMDB_SUGGEST_CACHE), f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"[-] Failed to save IMDb suggestion cache to disk: {e}", flush=True)
 
 # Core Scraper and Resolver imports
 try:
@@ -1101,8 +1126,9 @@ def force_refresh_trending_cache():
 def start_cache_scheduler():
     """Start a background scheduler thread that refreshes the cache every midnight (IST/local)."""
     import datetime
-    # 1. Load cache from file if it exists
+    # 1. Load caches from file if they exist
     load_trending_cache_from_file()
+    load_imdb_suggest_cache_from_file()
 
     # 2. If no cache data is present or cache is older than 1 day, trigger initial fetch immediately
     now = time.time()
@@ -1443,6 +1469,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         IMDB_SUGGEST_CACHE.popitem(last=False)
                     IMDB_SUGGEST_CACHE[query_lower] = res_payload
                     self.send_json(res_payload)
+                    save_imdb_suggest_cache_to_file()
                     return
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass  # Client aborted (AbortController) — expected during fast typing
@@ -1468,27 +1495,39 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     img_url = f"{match.group(1)}@._V1_QL75_UX100_.jpg"
 
 
-            # Serve from in-memory cache if available
-            if img_url in IMG_PROXY_CACHE:
-                cached = IMG_PROXY_CACHE[img_url]
-                IMG_PROXY_CACHE.move_to_end(img_url)
-                self.send_response(200)
-                self.send_header('Content-Type', cached['type'])
-                self.send_header('Cache-Control', 'public, max-age=86400')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.end_headers()
-                self.wfile.write(cached['data'])
-                return
+            # Compute safe MD5 filename for local disk storage
+            img_hash = hashlib.md5(img_url.encode('utf-8')).hexdigest() + ".jpg"
+            local_path = os.path.join(IMG_PROXY_DIR, img_hash)
 
+            # Serve from local persistent disk cache if present!
+            if os.path.exists(local_path):
+                try:
+                    with open(local_path, 'rb') as f:
+                        img_data = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'image/jpeg')
+                    self.send_header('Cache-Control', 'public, max-age=86400')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(img_data)
+                    return
+                except Exception as e:
+                    print(f"[-] Error reading cached poster from disk: {e}", flush=True)
+
+            # If not in disk cache, fetch it from source
             try:
                 resp = SESSION.get(img_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=4)
                 if resp.status_code == 200:
                     content_type = resp.headers.get('Content-Type', 'image/jpeg')
                     img_data = resp.content
-                    # LRU eviction
-                    while len(IMG_PROXY_CACHE) >= IMG_PROXY_CACHE_MAX:
-                        IMG_PROXY_CACHE.popitem(last=False)
-                    IMG_PROXY_CACHE[img_url] = {'data': img_data, 'type': content_type}
+
+                    # Save to local persistent disk cache!
+                    try:
+                        os.makedirs(IMG_PROXY_DIR, exist_ok=True)
+                        with open(local_path, 'wb') as f:
+                            f.write(img_data)
+                    except Exception as e:
+                        print(f"[-] Error writing poster cache to disk: {e}", flush=True)
 
                     self.send_response(200)
                     self.send_header('Content-Type', content_type)
