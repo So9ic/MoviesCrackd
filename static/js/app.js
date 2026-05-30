@@ -148,9 +148,9 @@
       resultsDiv.style.display = 'block';
 
       if (!trendingMoviesList || trendingMoviesList.length === 0) {
-        // Render 3 skeleton marquee rows while fetching
+        // Render 2 skeleton marquee rows while fetching
         let rowsHtml = '';
-        for (let r = 0; r < 3; r++) {
+        for (let r = 0; r < 2; r++) {
           const direction = (r % 2 === 0) ? 'left' : 'right';
           const skeletonsHtml = Array.from({length: 8}).map(() => `
             <div class="movie-card static-overlay skeleton-card" style="border: none;">
@@ -177,8 +177,8 @@
         return;
       }
 
-      // Split into 3 rows
-      const rowCount = 3;
+      // Split into 2 rows
+      const rowCount = 2;
       const moviesPerRow = Math.ceil(trendingMoviesList.length / rowCount);
       let rowsHtml = '';
 
