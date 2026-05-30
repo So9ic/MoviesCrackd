@@ -1301,6 +1301,72 @@ def get_cached_trending():
 
 ADMIN_SESSIONS = set()
 
+def parse_log_events(lines):
+    events = []
+    current_event = None
+    for line in lines:
+        if line.startswith('['):
+            if current_event:
+                events.append(current_event)
+            m = re.match(r'^\[(.*?)\]\s*(.*)', line)
+            if m:
+                ts = m.group(1)
+                first_line = m.group(2)
+            else:
+                ts = ""
+                first_line = line
+            current_event = {
+                "timestamp": ts,
+                "first_line": first_line,
+                "sublines": []
+            }
+        else:
+            if current_event:
+                current_event["sublines"].append(line.strip())
+    if current_event:
+        events.append(current_event)
+        
+    parsed_events = []
+    for ev in events:
+        first_line = ev["first_line"]
+        # Split by "|"
+        parts = [p.strip() for p in first_line.split('|')]
+        
+        username = "anonymous"
+        action = "SYSTEM"
+        title = ""
+        
+        if len(parts) >= 3:
+            username = parts[0].replace('👤', '').strip()
+            action = parts[1].strip()
+            title = parts[2].strip()
+            if title.startswith('"') and title.endswith('"'):
+                title = title[1:-1]
+        elif len(parts) == 2:
+            username = parts[0].replace('👤', '').strip()
+            action = parts[1].strip()
+        else:
+            title = first_line
+            
+        # Clean sublines (remove leading tab and tree drawing arrows like ├─►, └─►)
+        cleaned_sublines = []
+        for sl in ev["sublines"]:
+            cleaned = sl.strip()
+            cleaned = re.sub(r'^[├└]─►\s*', '', cleaned)
+            if cleaned:
+                cleaned_sublines.append(cleaned)
+                
+        parsed_events.append({
+            "timestamp": ev["timestamp"],
+            "username": username,
+            "action": action,
+            "title": title,
+            "sublines": cleaned_sublines
+        })
+    # Reverse so latest events are at the top
+    parsed_events.reverse()
+    return parsed_events
+
 class APIRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Silence annoying standard console access logs
@@ -1852,91 +1918,137 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html_code.encode('utf-8'))
 
-    def serve_logs_page(self, logs_content):
+    def serve_logs_page(self, logs_json):
         html_code = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MoviesCrackd - System Activity Logs</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <title>MoviesCrackd - Admin Logs</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {{
-            --bg-color: #0b0f19;
-            --panel-bg: rgba(17, 24, 39, 0.75);
+            --bg-color: #080b11;
+            --panel-bg: rgba(17, 24, 39, 0.7);
             --border-color: rgba(255, 255, 255, 0.08);
+            --accent-glow: linear-gradient(135deg, #a855f7, #6366f1);
             --text-main: #f3f4f6;
             --text-sub: #9ca3af;
-            --accent-glow: linear-gradient(135deg, #a855f7, #6366f1);
         }}
         * {{
             box-sizing: border-box;
             margin: 0;
             padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
         }}
         html, body {{
             height: 100%;
             overflow: hidden;
             background-color: var(--bg-color);
-            font-family: 'Outfit', sans-serif;
+            color: var(--text-main);
             display: flex;
-            align-items: center;
-            justify-content: center;
-            -webkit-user-select: none;
-            user-select: none;
+            flex-direction: column;
         }}
         .ambient-glow {{
             position: absolute;
-            width: 450px;
-            height: 450px;
+            width: 600px;
+            height: 600px;
             border-radius: 50%;
-            background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.04) 70%, transparent 100%);
-            filter: blur(60px);
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.08) 0%, rgba(99, 102, 241, 0.02) 70%, transparent 100%);
+            filter: blur(80px);
+            top: -200px;
+            left: -200px;
             z-index: 0;
+            pointer-events: none;
         }}
-        .logs-card {{
+        .ambient-glow-2 {{
+            position: absolute;
+            width: 600px;
+            height: 600px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.08) 0%, rgba(168, 85, 247, 0.02) 70%, transparent 100%);
+            filter: blur(80px);
+            bottom: -200px;
+            right: -200px;
+            z-index: 0;
+            pointer-events: none;
+        }}
+        header {{
             position: relative;
             z-index: 10;
-            width: 95%;
-            max-width: 900px;
-            height: 90%;
-            display: flex;
-            flex-direction: column;
-            background: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-radius: 24px;
-            box-shadow: 0 20px 45px rgba(0,0,0,0.5);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            padding: 30px;
-            animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
-        }}
-        @keyframes scaleIn {{
-            from {{ opacity: 0; transform: scale(0.97); }}
-            to {{ opacity: 1; transform: scale(1); }}
-        }}
-        .logs-header {{
+            background: rgba(17, 24, 39, 0.75);
+            border-bottom: 1px solid var(--border-color);
+            padding: 15px 40px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            margin-bottom: 20px;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 15px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             flex-shrink: 0;
         }}
-        .logs-header h2 {{
-            color: var(--text-main);
-            font-size: 22px;
+        .header-left {{
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }}
+        .header-left h1 {{
+            font-size: 20px;
             font-weight: 700;
             display: flex;
             align-items: center;
             gap: 10px;
         }}
-        .btn-group {{
-            display: flex;
-            gap: 10px;
+        .header-left .count-badge {{
+            background: rgba(255,255,255,0.06);
+            border: 1px solid var(--border-color);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-sub);
         }}
-        .action-btn {{
+        .search-container {{
+            flex: 1;
+            max-width: 450px;
+            margin: 0 30px;
+            position: relative;
+        }}
+        .search-container input {{
+            width: 100%;
+            padding: 10px 16px 10px 40px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-main);
+            font-size: 14px;
+            outline: none;
+            transition: all 0.3s ease;
+            -webkit-user-select: text;
+            user-select: text;
+        }}
+        .search-container input:focus {{
+            border-color: #a855f7;
+            background: rgba(255,255,255,0.06);
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.15);
+        }}
+        .search-container svg {{
+            position: absolute;
+            left: 14px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            fill: var(--text-sub);
+            pointer-events: none;
+        }}
+        .header-right {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .btn {{
             background: rgba(255,255,255,0.05);
             border: 1px solid var(--border-color);
             color: var(--text-sub);
@@ -1946,67 +2058,409 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             font-size: 13px;
             font-weight: 600;
             transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
         }}
-        .action-btn:hover {{
+        .btn:hover {{
             background: rgba(255,255,255,0.1);
             color: var(--text-main);
         }}
-        .action-btn.accent-btn {{
+        .btn.accent {{
             background: var(--accent-glow);
             border: none;
             color: #ffffff;
             box-shadow: 0 4px 12px rgba(168, 85, 247, 0.2);
         }}
-        .action-btn.accent-btn:hover {{
+        .btn.accent:hover {{
             opacity: 0.95;
         }}
-        .logs-viewer {{
+        .btn:active {{
+            transform: scale(0.98);
+        }}
+        .filter-bar {{
+            position: relative;
+            z-index: 10;
+            background: rgba(17, 24, 39, 0.4);
+            border-bottom: 1px solid var(--border-color);
+            padding: 10px 40px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }}
+        .filter-pill {{
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            color: var(--text-sub);
+            transition: all 0.2s ease;
+        }}
+        .filter-pill:hover {{
+            background: rgba(255,255,255,0.06);
+            color: var(--text-main);
+        }}
+        .filter-pill.active {{
+            background: rgba(168, 85, 247, 0.15);
+            border-color: rgba(168, 85, 247, 0.4);
+            color: #f5f3ff;
+        }}
+        main {{
             flex: 1;
-            background: rgba(0, 0, 0, 0.4);
+            overflow-y: auto;
+            position: relative;
+            z-index: 10;
+            padding: 30px 40px;
+        }}
+        .logs-wrapper {{
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }}
+        .log-card {{
+            background: rgba(17, 24, 39, 0.45);
             border: 1px solid var(--border-color);
             border-radius: 16px;
-            padding: 20px;
-            overflow-y: auto;
-            font-family: 'Fira Code', monospace;
-            font-size: 13px;
-            color: #a7f3d0;
-            text-align: left;
-            white-space: pre-wrap;
-            user-select: text;
+            padding: 18px 24px;
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }}
+        .log-card:hover {{
+            transform: translateY(-1px);
+            border-color: rgba(168, 85, 247, 0.25);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+            background: rgba(17, 24, 39, 0.6);
+        }}
+        .action-badge {{
+            padding: 8px 14px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+            min-width: 130px;
+            justify-content: center;
+        }}
+        .action-badge.search {{
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: #34d399;
+        }}
+        .action-badge.download {{
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+        }}
+        .action-badge.cloud {{
+            background: rgba(139, 92, 246, 0.1);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            color: #a78bfa;
+        }}
+        .action-badge.details {{
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
+        }}
+        .action-badge.system {{
+            background: rgba(107, 114, 128, 0.1);
+            border: 1px solid rgba(107, 114, 128, 0.2);
+            color: #9ca3af;
+        }}
+        .log-content {{
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }}
+        .log-meta {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+        }}
+        .user-container {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .user-badge {{
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        .timestamp {{
+            font-size: 12px;
+            color: var(--text-sub);
+        }}
+        .log-title {{
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--text-main);
+            line-height: 1.4;
+            word-break: break-word;
             -webkit-user-select: text;
+            user-select: text;
         }}
-        .logs-viewer::-webkit-scrollbar {{
-            width: 8px;
-            height: 8px;
+        .meta-rows {{
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 6px;
         }}
-        .logs-viewer::-webkit-scrollbar-track {{
+        .meta-row {{
             background: rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.03);
+            border-radius: 8px;
+            padding: 8px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 20px;
+            font-size: 13px;
+        }}
+        .meta-label {{
+            color: var(--text-sub);
+            font-weight: 500;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }}
+        .meta-val {{
+            font-family: monospace;
+            color: var(--text-main);
+            word-break: break-all;
+            -webkit-user-select: text;
+            user-select: text;
+        }}
+        .meta-val.link-style {{
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 600;
+            transition: color 0.2s ease;
+        }}
+        .meta-val.link-style:hover {{
+            color: #60a5fa;
+            text-decoration: underline;
+        }}
+        .no-logs {{
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-sub);
+            font-size: 15px;
+            background: rgba(17, 24, 39, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+        }}
+        main::-webkit-scrollbar {{
+            width: 8px;
+        }}
+        main::-webkit-scrollbar-track {{
+            background: transparent;
+        }}
+        main::-webkit-scrollbar-thumb {{
+            background: rgba(255,255,255,0.08);
             border-radius: 4px;
         }}
-        .logs-viewer::-webkit-scrollbar-thumb {{
-            background: rgba(255,255,255,0.1);
-            border-radius: 4px;
-        }}
-        .logs-viewer::-webkit-scrollbar-thumb:hover {{
-            background: rgba(255,255,255,0.2);
+        main::-webkit-scrollbar-thumb:hover {{
+            background: rgba(255,255,255,0.15);
         }}
     </style>
 </head>
 <body>
     <div class="ambient-glow"></div>
-    <div class="logs-card">
-        <div class="logs-header">
-            <h2>📋 System Activity Logs</h2>
-            <div class="btn-group">
-                <button class="action-btn" onclick="window.location.reload()">🔄 Refresh</button>
-                <button class="action-btn" onclick="window.location.href='/stats'">📊 Stats</button>
-                <button class="action-btn accent-btn" onclick="window.location.href='/'">Go Home</button>
-            </div>
+    <div class="ambient-glow-2"></div>
+
+    <header>
+        <div class="header-left">
+            <h1>📋 System Activity Logs</h1>
+            <span class="count-badge" id="count-label">0 events</span>
         </div>
-        <div class="logs-viewer" id="logs-content">{logs_content}</div>
+        <div class="search-container">
+            <svg viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input type="text" id="search-input" placeholder="Search by username or title...">
+        </div>
+        <div class="header-right">
+            <button class="btn" onclick="window.location.reload()">🔄 Refresh</button>
+            <button class="btn" onclick="window.location.href='/stats'">📊 Stats</button>
+            <button class="btn accent" onclick="window.location.href='/'">Go Home</button>
+        </div>
+    </header>
+
+    <div class="filter-bar">
+        <div class="filter-pill active" data-filter="all">All Events</div>
+        <div class="filter-pill" data-filter="search">🔍 Searches</div>
+        <div class="filter-pill" data-filter="download">🚀 Downloads</div>
+        <div class="filter-pill" data-filter="cloud">☁️ Cloud DLs</div>
+        <div class="filter-pill" data-filter="details">ℹ️ Details</div>
     </div>
+
+    <main>
+        <div class="logs-wrapper" id="logs-container"></div>
+    </main>
+
     <script>
-        document.getElementById('logs-content').scrollTop = 0;
+        const LOGS_DATA = {logs_json};
+
+        function getUsernameColor(username) {{
+            if (!username || username === 'anonymous' || username === 'system') {{
+                return {{
+                    bg: 'rgba(156, 163, 175, 0.08)',
+                    border: 'rgba(156, 163, 175, 0.18)',
+                    text: '#9ca3af'
+                }};
+            }}
+            let hash = 0;
+            for (let i = 0; i < username.length; i++) {{
+                hash = username.charCodeAt(i) + ((hash << 5) - hash);
+            }}
+            const hue = Math.abs(hash % 360);
+            return {{
+                bg: `hsla(${{hue}}, 55%, 45%, 0.08)`,
+                border: `hsla(${{hue}}, 55%, 45%, 0.22)`,
+                text: `hsl(${{hue}}, 65%, 72%)`
+            }};
+        }}
+
+        function getActionBadgeClass(action) {{
+            const act = action.toUpperCase();
+            if (act.includes('SEARCH')) return 'search';
+            if (act.includes('CLOUD')) return 'cloud';
+            if (act.includes('DOWNLOAD')) return 'download';
+            if (act.includes('DETAIL')) return 'details';
+            return 'system';
+        }}
+
+        function getActionIcon(action) {{
+            const act = action.toUpperCase();
+            if (act.includes('SEARCH')) return '🔍';
+            if (act.includes('CLOUD')) return '☁️';
+            if (act.includes('DOWNLOAD')) return '🚀';
+            if (act.includes('DETAIL')) return 'ℹ️';
+            return '⚙️';
+        }}
+
+        let currentFilter = 'all';
+        let searchQuery = '';
+
+        const searchInput = document.getElementById('search-input');
+        const container = document.getElementById('logs-container');
+        const countLabel = document.getElementById('count-label');
+
+        function renderLogs() {{
+            container.innerHTML = '';
+            
+            const filtered = LOGS_DATA.filter(item => {{
+                const act = item.action.toUpperCase();
+                if (currentFilter !== 'all') {{
+                    if (currentFilter === 'search' && !act.includes('SEARCH')) return false;
+                    if (currentFilter === 'download' && !act.includes('DOWNLOAD')) return false;
+                    if (currentFilter === 'cloud' && !act.includes('CLOUD')) return false;
+                    if (currentFilter === 'details' && !act.includes('DETAIL')) return false;
+                }}
+                
+                if (searchQuery) {{
+                    const q = searchQuery.toLowerCase();
+                    const userMatch = item.username.toLowerCase().includes(q);
+                    const titleMatch = item.title.toLowerCase().includes(q);
+                    const subMatch = item.sublines.some(sl => sl.toLowerCase().includes(q));
+                    if (!userMatch && !titleMatch && !subMatch) return false;
+                }}
+                
+                return true;
+            }});
+
+            countLabel.innerText = `${{filtered.length}} event${{filtered.length === 1 ? '' : 's'}}`;
+
+            if (filtered.length === 0) {{
+                container.innerHTML = `<div class="no-logs">No activity log events match your filters.</div>`;
+                return;
+            }}
+
+            filtered.forEach(item => {{
+                const colors = getUsernameColor(item.username);
+                const badgeClass = getActionBadgeClass(item.action);
+                const icon = getActionIcon(item.action);
+                
+                const card = document.createElement('div');
+                card.className = 'log-card';
+                
+                let cleanAction = item.action.replace(/[🔍☁️🚀ℹ️⚙️👤|]/g, '').trim();
+
+                let metaHTML = '';
+                if (item.sublines && item.sublines.length > 0) {{
+                    metaHTML = `<div class="meta-rows">`;
+                    item.sublines.forEach(sl => {{
+                        let label = 'Detail';
+                        let val = sl;
+                        
+                        if (sl.includes(':')) {{
+                            const idx = sl.indexOf(':');
+                            label = sl.substring(0, idx).trim();
+                            val = sl.substring(idx + 1).trim();
+                        }}
+                        
+                        const isUrl = val.startsWith('http://') || val.startsWith('https://');
+                        const valHTML = isUrl 
+                            ? `<a class="meta-val link-style" href="${{val}}" target="_blank">${{val}}</a>` 
+                            : `<span class="meta-val">${{val}}</span>`;
+                            
+                        metaHTML += `
+                            <div class="meta-row">
+                                <span class="meta-label">${{label}}</span>
+                                ${{valHTML}}
+                            </div>
+                        `;
+                    }});
+                    metaHTML += `</div>`;
+                }}
+
+                card.innerHTML = `
+                    <div class="action-badge ${{badgeClass}}">${{icon}} ${{cleanAction}}</div>
+                    <div class="log-content">
+                        <div class="log-meta">
+                            <div class="user-container">
+                                <span class="user-badge" style="background: ${{colors.bg}}; border: 1px solid ${{colors.border}}; color: ${{colors.text}};">${{item.username}}</span>
+                            </div>
+                            <span class="timestamp">${{item.timestamp}}</span>
+                        </div>
+                        <div class="log-title">${{item.title}}</div>
+                        ${{metaHTML}}
+                    </div>
+                `;
+                container.appendChild(card);
+            }});
+        }}
+
+        searchInput.addEventListener('input', (e) => {{
+            searchQuery = e.target.value;
+            renderLogs();
+        }});
+
+        document.querySelectorAll('.filter-pill').forEach(pill => {{
+            pill.addEventListener('click', (e) => {{
+                document.querySelectorAll('.filter-pill').forEach(p => p.classList.remove('active'));
+                pill.classList.add('active');
+                currentFilter = pill.getAttribute('data-filter');
+                renderLogs();
+            }});
+        }});
+
+        renderLogs();
     </script>
 </body>
 </html>"""
@@ -2106,34 +2560,31 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             if not self.check_admin_auth():
                 return
             
-            raw_logs_content = ""
-            try:
-                if os.path.exists(SEARCH_LOGS_FILE):
-                    with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                    
-                    # Group lines into discrete event blocks (each block starts with a '[' timestamp)
-                    events = []
-                    current_event = []
-                    for line in lines:
-                        if line.startswith('['):
-                            if current_event:
-                                events.append("".join(current_event))
-                                current_event = []
-                        current_event.append(line)
-                    if current_event:
-                        events.append("".join(current_event))
-                    
-                    # Reverse the list of event blocks so that the latest events are at the top,
-                    # while maintaining normal forward chronological order within each event!
-                    reversed_events = reversed(events)
-                    raw_logs_content = "".join(reversed_events)
-                else:
-                    raw_logs_content = "No search logs found yet."
-            except Exception as e:
-                raw_logs_content = f"Error reading logs: {e}"
-
             if parsed.path == '/api/logs':
+                raw_logs_content = ""
+                try:
+                    if os.path.exists(SEARCH_LOGS_FILE):
+                        with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                        
+                        events = []
+                        current_event = []
+                        for line in lines:
+                            if line.startswith('['):
+                                if current_event:
+                                    events.append("".join(current_event))
+                                    current_event = []
+                            current_event.append(line)
+                        if current_event:
+                            events.append("".join(current_event))
+                        
+                        reversed_events = reversed(events)
+                        raw_logs_content = "".join(reversed_events)
+                    else:
+                        raw_logs_content = "No search logs found yet."
+                except Exception as e:
+                    raw_logs_content = f"Error reading logs: {e}"
+
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -2141,8 +2592,16 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(raw_logs_content.encode('utf-8'))
             else:
-                import html
-                self.serve_logs_page(html.escape(raw_logs_content))
+                parsed_events = []
+                try:
+                    if os.path.exists(SEARCH_LOGS_FILE):
+                        with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                        parsed_events = parse_log_events(lines)
+                except Exception as e:
+                    parsed_events = [{"timestamp": "", "username": "system", "action": "system error", "title": f"Error loading logs: {e}", "sublines": []}]
+                
+                self.serve_logs_page(json.dumps(parsed_events))
             return
 
         # 1c-3. Record search log silently for cached local searches & details page views & clicks
