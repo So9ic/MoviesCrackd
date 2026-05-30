@@ -277,12 +277,15 @@
         const wrapper = track.closest('.marquee-row-wrapper');
         
         let x = 0;
+        let lastRenderedX = NaN; // Track last written x to skip redundant DOM writes
         let velocity = 0;
         let isDragging = false;
         let hasMoved = false;
         let isScrolling = false;
         let trackPaused = false;
+        let isHovered = false; // Event-driven hover state (no per-frame style queries)
         let alive = true; // kill-switch for the tick loop
+        let frameCount = 0; // Throttle connectivity checks
         
         let startX = 0;
         let startY = 0;
@@ -290,6 +293,13 @@
         let lastX = 0;
         let lastTime = 0;
         let cachedWrapDist = 0;
+
+        // Use event-driven hover detection instead of per-frame wrapper.matches(':hover')
+        // This eliminates forced style recalculations ~120 times/sec
+        if (isHoverDevice && wrapper) {
+          wrapper.addEventListener('mouseenter', () => { isHovered = true; });
+          wrapper.addEventListener('mouseleave', () => { isHovered = false; });
+        }
 
         // Force disable keyframe animations so they don't fight custom translate3d
         track.style.animation = 'none';
@@ -429,8 +439,12 @@
 
         // Smooth Physics Autoplay Tick Loop
         function tick() {
-          // Self-terminate if killed or DOM node was destroyed
-          if (!alive || !track.isConnected) return;
+          if (!alive) return;
+          // Throttle DOM connectivity check to every ~60 frames (~1 second) instead of every frame
+          if (++frameCount >= 60) {
+            frameCount = 0;
+            if (!track.isConnected) return;
+          }
 
           if (!isDragging) {
             // Apply momentum deceleration
@@ -441,15 +455,18 @@
               velocity = 0;
             }
 
-            // Hover-pause only on devices with real mouse hover (cached wrapper ref)
-            const isHovered = isHoverDevice && wrapper.matches(':hover');
-            
+            // Hover-pause uses cached boolean (set by mouseenter/mouseleave)
             if (!isHovered && !trackPaused) {
               x += baseSpeed;
             }
             
             x = wrapOffset(x);
-            track.style.transform = 'translate3d(' + x + 'px,0,0)';
+
+            // Only write to DOM if position actually changed (skip redundant compositor work)
+            if (x !== lastRenderedX) {
+              lastRenderedX = x;
+              track.style.transform = 'translate3d(' + x + 'px,0,0)';
+            }
           }
           
           requestAnimationFrame(tick);
