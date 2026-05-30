@@ -2420,6 +2420,134 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             background: rgba(255, 255, 255, 0.08);
             color: var(--text-main);
         }}
+
+        /* PREMIUM MOBILE RESPONSIVENESS OVERRIDES */
+        @media (max-width: 820px) {{
+            header {{
+                flex-direction: column;
+                padding: 15px 20px;
+                gap: 12px;
+                align-items: stretch;
+            }}
+            .header-left {{
+                justify-content: space-between;
+                width: 100%;
+            }}
+            .header-left h1 {{
+                font-size: 18px;
+            }}
+            .search-container {{
+                margin: 0;
+                max-width: 100%;
+                width: 100%;
+            }}
+            .header-right {{
+                justify-content: space-between;
+                width: 100%;
+                gap: 8px;
+            }}
+            .header-right .btn {{
+                flex: 1;
+                justify-content: center;
+                font-size: 12px;
+                padding: 8px 10px;
+            }}
+            .filter-bar {{
+                padding: 10px 20px;
+                overflow-x: auto;
+                white-space: nowrap;
+                gap: 8px;
+                -webkit-overflow-scrolling: touch;
+            }}
+            .filter-bar::-webkit-scrollbar {{
+                display: none;
+            }}
+            .filter-pill {{
+                flex-shrink: 0;
+                padding: 6px 12px;
+                font-size: 11px;
+            }}
+            main {{
+                padding: 15px 20px;
+            }}
+            .log-card {{
+                flex-direction: column;
+                gap: 12px;
+                padding: 16px;
+                border-radius: 12px;
+            }}
+            .action-badge {{
+                width: 100%;
+                min-width: 0;
+                justify-content: center;
+                padding: 6px 12px;
+            }}
+            .log-content {{
+                width: 100%;
+            }}
+            .log-meta {{
+                flex-direction: row;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                width: 100%;
+            }}
+            .log-title {{
+                font-size: 14px;
+            }}
+            .meta-row {{
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+                padding: 8px 12px;
+            }}
+            .meta-val {{
+                word-break: break-all;
+                text-align: left;
+                width: 100%;
+            }}
+            /* Modal improvements on mobile */
+            .modal-card {{
+                padding: 24px 20px 20px 20px;
+                border-radius: 20px;
+                width: 92%;
+                margin: 10px;
+                max-height: 90%;
+                display: flex;
+                flex-direction: column;
+            }}
+            .modal-header {{
+                margin-bottom: 16px;
+            }}
+            .modal-header h3 {{
+                font-size: 18px;
+            }}
+            .stats-grid {{
+                grid-template-columns: 1fr;
+                gap: 10px;
+                margin-bottom: 20px;
+                overflow-y: auto;
+                max-height: 50vh;
+                padding-right: 4px;
+            }}
+            .stat-box {{
+                padding: 10px 12px;
+                gap: 4px;
+            }}
+            .stat-value {{
+                font-size: 13px;
+                word-break: break-all;
+            }}
+            .modal-actions {{
+                flex-direction: column;
+                gap: 10px;
+            }}
+            .action-btn {{
+                padding: 10px;
+                font-size: 12px;
+                width: 100%;
+            }}
+        }}
     </style>
 </head>
 <body>
