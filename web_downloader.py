@@ -3143,7 +3143,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     return f"{bytes_size:.2f} TB"
 
                 import platform
-                import os
                 
                 uptime_seconds = int(time.time() - START_TIME)
                 hours = uptime_seconds // 3600
