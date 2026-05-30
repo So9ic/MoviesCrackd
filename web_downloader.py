@@ -1299,6 +1299,8 @@ def get_cached_trending():
 
 # ── Threaded HTTP Request Handler & API Router ───────────────────────────
 
+ADMIN_SESSIONS = set()
+
 class APIRequestHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         # Silence annoying standard console access logs
@@ -1321,35 +1323,722 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()
 
-    def check_admin_auth(self) -> bool:
-        """Enforce standard HTTP Basic Authentication for sensitive admin endpoints."""
-        import base64
-        admin_user = os.getenv("ADMIN_USERNAME", "admin").strip()
-        admin_pass = os.getenv("ADMIN_PASSWORD", "admin123").strip()
+    def serve_login_page(self, redirect_to):
+        html_code = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MoviesCrackd - Admin Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-color: #0b0f19;
+            --panel-bg: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent-glow: linear-gradient(135deg, #a855f7, #6366f1);
+            --text-main: #f3f4f6;
+            --text-sub: #9ca3af;
+        }}
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }}
+        html, body {{
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .ambient-glow {{
+            position: absolute;
+            width: 350px;
+            height: 350px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.15) 0%, rgba(99, 102, 241, 0.05) 70%, transparent 100%);
+            filter: blur(50px);
+            z-index: 0;
+        }}
+        .login-card {{
+            position: relative;
+            z-index: 10;
+            width: 90%;
+            max-width: 400px;
+            padding: 40px 30px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            text-align: center;
+            animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }}
+        @keyframes fadeIn {{
+            from {{ opacity: 0; transform: translateY(20px); }}
+            to {{ opacity: 1; transform: translateY(0); }}
+        }}
+        .logo-mark {{
+            font-size: 40px;
+            margin-bottom: 15px;
+            display: inline-block;
+        }}
+        h2 {{
+            color: var(--text-main);
+            font-weight: 700;
+            font-size: 24px;
+            margin-bottom: 8px;
+        }}
+        .subtitle {{
+            color: var(--text-sub);
+            font-size: 14px;
+            margin-bottom: 30px;
+        }}
+        .form-group {{
+            text-align: left;
+            margin-bottom: 20px;
+        }}
+        label {{
+            display: block;
+            color: var(--text-sub);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }}
+        input {{
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            color: var(--text-main);
+            font-size: 15px;
+            outline: none;
+            transition: all 0.3s ease;
+            -webkit-user-select: text;
+            user-select: text;
+        }}
+        input:focus {{
+            border-color: #a855f7;
+            background: rgba(255,255,255,0.05);
+            box-shadow: 0 0 10px rgba(168, 85, 247, 0.2);
+        }}
+        .login-btn {{
+            width: 100%;
+            padding: 14px;
+            margin-top: 15px;
+            background: var(--accent-glow);
+            border: none;
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.3);
+        }}
+        .login-btn:active {{
+            transform: scale(0.98);
+        }}
+        .login-btn:hover {{
+            opacity: 0.95;
+        }}
+        .error-banner {{
+            display: none;
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+            padding: 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            margin-bottom: 20px;
+            animation: shake 0.3s ease;
+        }}
+        @keyframes shake {{
+            0%, 100% {{ transform: translateX(0); }}
+            25% {{ transform: translateX(-5px); }}
+            75% {{ transform: translateX(5px); }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="ambient-glow"></div>
+    <div class="login-card">
+        <span class="logo-mark">📊</span>
+        <h2>Admin Authentication</h2>
+        <p class="subtitle">Access is restricted to system administrators</p>
+        
+        <div id="error-banner" class="error-banner">Invalid username or password.</div>
+        
+        <form id="login-form">
+            <div class="form-group">
+                <label for="username">Username</label>
+                <input type="text" id="username" required autocomplete="username">
+            </div>
+            <div class="form-group">
+                <label for="password">Password</label>
+                <input type="password" id="password" required autocomplete="current-password">
+            </div>
+            <button type="submit" class="login-btn">Secure Login</button>
+        </form>
+    </div>
 
-        auth_header = self.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Basic '):
-            self.send_response(401)
-            self.send_header('WWW-Authenticate', 'Basic realm="Admin Logs"')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-            self.wfile.write(b"Unauthorized: Access to logs is restricted to administrator.")
+    <script>
+        document.getElementById('login-form').addEventListener('submit', function(e) {{
+            e.preventDefault();
+            const user = document.getElementById('username').value;
+            const pass = document.getElementById('password').value;
+            const banner = document.getElementById('error-banner');
+            
+            banner.style.display = 'none';
+            
+            fetch('/api/admin/login', {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ username: user, password: pass }})
+            }})
+            .then(res => res.json())
+            .then(data => {{
+                if (data.status === 'success') {{
+                    window.location.href = "{redirect_to}";
+                }} else {{
+                    banner.style.display = 'block';
+                }}
+            }})
+            .catch(() => {{
+                banner.style.display = 'block';
+            }});
+        }});
+    </script>
+</body>
+</html>"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.end_headers()
+        self.wfile.write(html_code.encode('utf-8'))
+
+    def serve_stats_page(self):
+        html_code = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MoviesCrackd - Premium Diagnostics</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --panel-bg: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --accent-glow: linear-gradient(135deg, #a855f7, #6366f1);
+            --text-main: #f3f4f6;
+            --text-sub: #9ca3af;
+            --blue: #3b82f6;
+            --crimson: #ef4444;
+            --emerald: #10b981;
+        }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        html, body {
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ambient-glow {
+            position: absolute;
+            width: 450px;
+            height: 450px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(168, 85, 247, 0.12) 0%, rgba(99, 102, 241, 0.04) 70%, transparent 100%);
+            filter: blur(60px);
+            z-index: 0;
+        }
+        .stats-card {
+            position: relative;
+            z-index: 10;
+            width: 90%;
+            max-width: 550px;
+            padding: 35px 30px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            box-shadow: 0 20px 45px rgba(0,0,0,0.5);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        @keyframes scaleIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .stats-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 25px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+        }
+        .stats-header h2 {
+            color: var(--text-main);
+            font-size: 22px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .close-btn {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-sub);
+            padding: 6px 12px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }
+        .close-btn:hover {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-main);
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 25px;
+        }
+        .stat-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            border-radius: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .stat-label {
+            color: var(--text-sub);
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .stat-val {
+            color: var(--text-main);
+            font-size: 17px;
+            font-weight: 700;
+        }
+        .stat-val.active-color {
+            color: #a855f7;
+        }
+        .actions-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 15px;
+        }
+        .action-btn {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+        }
+        .action-btn.server-btn {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+        }
+        .action-btn.server-btn:hover:not(:disabled) {
+            background: rgba(239, 68, 68, 0.2);
+        }
+        .action-btn.client-btn {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: rgba(59, 130, 246, 0.2);
+            color: #93c5fd;
+        }
+        .action-btn.client-btn:hover:not(:disabled) {
+            background: rgba(59, 130, 246, 0.2);
+        }
+        .action-btn:active {
+            transform: scale(0.98);
+        }
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .view-logs-btn {
+            width: 100%;
+            padding: 14px;
+            background: var(--accent-glow);
+            border: none;
+            border-radius: 12px;
+            color: #ffffff;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.2);
+        }
+        .view-logs-btn:hover {
+            opacity: 0.95;
+        }
+        .view-logs-btn:active {
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body>
+    <div class="ambient-glow"></div>
+    <div class="stats-card">
+        <div class="stats-header">
+            <h2>📊 System Stats & Diagnostics</h2>
+            <button class="close-btn" onclick="window.location.href='/'">Go Home</button>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-item">
+                <span class="stat-label">Project Storage (SSD)</span>
+                <span class="stat-val" id="diag-project-size">Calculating...</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Server Autocomplete Cache</span>
+                <span class="stat-val" id="diag-server-suggest">Calculating...</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Cached Poster Thumbnails</span>
+                <span class="stat-val" id="diag-server-posters">Calculating...</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Showcase Trending Cache</span>
+                <span class="stat-val" id="diag-trending-cache">Calculating...</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Client Suggestion Cache</span>
+                <span class="stat-val" id="diag-client-suggest">Calculating...</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">Client Browser Storage</span>
+                <span class="stat-val" id="diag-client-size">Calculating...</span>
+            </div>
+            <div class="stat-item" style="grid-column: 1 / -1;">
+                <span class="stat-label">Server Date & Time (Local)</span>
+                <span class="stat-val active-color" id="diag-server-time">Calculating...</span>
+            </div>
+        </div>
+        
+        <div class="actions-row">
+            <button class="action-btn server-btn" id="server-btn" onclick="clearServerCache()">🧹 Clear Server SSD</button>
+            <button class="action-btn client-btn" onclick="clearClientCache()">🗑 Clear Client Cache</button>
+        </div>
+        
+        <button class="view-logs-btn" onclick="window.location.href='/logs'">📋 Open System Activity Logs</button>
+    </div>
+
+    <script>
+        function loadStats() {
+            fetch('/api/storage-stats')
+                .then(res => {
+                    if (res.status === 401) {
+                        window.location.reload();
+                        return;
+                    }
+                    return res.json();
+                })
+                .then(data => {
+                    if (!data) return;
+                    document.getElementById('diag-project-size').innerText = data.total_project_size;
+                    document.getElementById('diag-server-suggest').innerText = `${data.imdb_suggest_cache_size} (${data.imdb_suggest_cache_count} q)`;
+                    document.getElementById('diag-server-posters').innerText = `${data.cached_posters_size} (${data.cached_posters_count} posters)`;
+                    document.getElementById('diag-trending-cache').innerText = data.trending_cache_size;
+                    document.getElementById('diag-server-time').innerText = data.server_time;
+                })
+                .catch(err => console.error(err));
+
+            try {
+                const IMDB_SUGGESTIONS_CACHE_KEY = 'mcrackd_imdb_suggestions';
+                const saved = localStorage.getItem(IMDB_SUGGESTIONS_CACHE_KEY);
+                let suggestionsClientCache = saved ? JSON.parse(saved) : {};
+                const clientSuggestCount = Object.keys(suggestionsClientCache).length;
+                const serialized = JSON.stringify(suggestionsClientCache);
+                const clientSuggestBytes = new TextEncoder().encode(serialized).length;
+                
+                let clientSuggestSize = `${(clientSuggestBytes / 1024).toFixed(2)} KB`;
+                if (clientSuggestBytes >= 1048576) {
+                    clientSuggestSize = `${(clientSuggestBytes / 1048576).toFixed(2)} MB`;
+                }
+                document.getElementById('diag-client-suggest').innerText = `${clientSuggestSize} (${clientSuggestCount} q)`;
+
+                let totalLocalStorageBytes = 0;
+                for (let i = 0; i < localStorage.length; i++) {
+                    const key = localStorage.key(i);
+                    const val = localStorage.getItem(key);
+                    totalLocalStorageBytes += new TextEncoder().encode(key + val).length;
+                }
+                let totalLocalStorageSize = `${(totalLocalStorageBytes / 1024).toFixed(2)} KB`;
+                if (totalLocalStorageBytes >= 1048576) {
+                    totalLocalStorageSize = `${(totalLocalStorageBytes / 1048576).toFixed(2)} MB`;
+                }
+                document.getElementById('diag-client-size').innerText = totalLocalStorageSize;
+            } catch (e) {
+                document.getElementById('diag-client-suggest').innerText = '0 B';
+                document.getElementById('diag-client-size').innerText = '0 B';
+            }
+        }
+
+        function clearServerCache() {
+            if (!confirm("Are you sure you want to permanently clear the server-side suggestions cache and delete all cached posters from the SSD?")) return;
+            
+            const btn = document.getElementById('server-btn');
+            btn.innerText = "🧹 Clearing...";
+            btn.disabled = true;
+
+            fetch('/api/clear-server-cache')
+                .then(res => res.json())
+                .then(data => {
+                    alert(data.message || "Server cache cleared successfully!");
+                    loadStats();
+                })
+                .catch(err => alert("Failed to clear server cache: " + err))
+                .finally(() => {
+                    btn.innerText = "🧹 Clear Server SSD";
+                    btn.disabled = false;
+                });
+        }
+
+        function clearClientCache() {
+            if (!confirm("Are you sure you want to delete all client-side browser suggestion caches?")) return;
+            localStorage.removeItem('mcrackd_imdb_suggestions');
+            alert("Client-side suggestions cache cleared successfully!");
+            loadStats();
+        }
+
+        window.onload = loadStats;
+    </script>
+</body>
+</html>"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.end_headers()
+        self.wfile.write(html_code.encode('utf-8'))
+
+    def serve_logs_page(self, logs_content):
+        html_code = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>MoviesCrackd - System Activity Logs</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {{
+            --bg-color: #0b0f19;
+            --panel-bg: rgba(17, 24, 39, 0.75);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-main: #f3f4f6;
+            --text-sub: #9ca3af;
+            --accent-glow: linear-gradient(135deg, #a855f7, #6366f1);
+        }}
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }}
+        html, body {{
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--bg-color);
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-user-select: none;
+            user-select: none;
+        }}
+        .ambient-glow {{
+            position: absolute;
+            width: 450px;
+            height: 450px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.04) 70%, transparent 100%);
+            filter: blur(60px);
+            z-index: 0;
+        }}
+        .logs-card {{
+            position: relative;
+            z-index: 10;
+            width: 95%;
+            max-width: 900px;
+            height: 90%;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            box-shadow: 0 20px 45px rgba(0,0,0,0.5);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            padding: 30px;
+            animation: scaleIn 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }}
+        @keyframes scaleIn {{
+            from {{ opacity: 0; transform: scale(0.97); }}
+            to {{ opacity: 1; transform: scale(1); }}
+        }}
+        .logs-header {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 20px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 15px;
+            flex-shrink: 0;
+        }}
+        .logs-header h2 {{
+            color: var(--text-main);
+            font-size: 22px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }}
+        .btn-group {{
+            display: flex;
+            gap: 10px;
+        }}
+        .action-btn {{
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border-color);
+            color: var(--text-sub);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s ease;
+        }}
+        .action-btn:hover {{
+            background: rgba(255,255,255,0.1);
+            color: var(--text-main);
+        }}
+        .action-btn.accent-btn {{
+            background: var(--accent-glow);
+            border: none;
+            color: #ffffff;
+            box-shadow: 0 4px 12px rgba(168, 85, 247, 0.2);
+        }}
+        .action-btn.accent-btn:hover {{
+            opacity: 0.95;
+        }}
+        .logs-viewer {{
+            flex: 1;
+            background: rgba(0, 0, 0, 0.4);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 20px;
+            overflow-y: auto;
+            font-family: 'Fira Code', monospace;
+            font-size: 13px;
+            color: #a7f3d0;
+            text-align: left;
+            white-space: pre-wrap;
+            user-select: text;
+            -webkit-user-select: text;
+        }}
+        .logs-viewer::-webkit-scrollbar {{
+            width: 8px;
+            height: 8px;
+        }}
+        .logs-viewer::-webkit-scrollbar-track {{
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+        }}
+        .logs-viewer::-webkit-scrollbar-thumb {{
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }}
+        .logs-viewer::-webkit-scrollbar-thumb:hover {{
+            background: rgba(255,255,255,0.2);
+        }}
+    </style>
+</head>
+<body>
+    <div class="ambient-glow"></div>
+    <div class="logs-card">
+        <div class="logs-header">
+            <h2>📋 System Activity Logs</h2>
+            <div class="btn-group">
+                <button class="action-btn" onclick="window.location.reload()">🔄 Refresh</button>
+                <button class="action-btn" onclick="window.location.href='/stats'">📊 Stats</button>
+                <button class="action-btn accent-btn" onclick="window.location.href='/'">Go Home</button>
+            </div>
+        </div>
+        <div class="logs-viewer" id="logs-content">{logs_content}</div>
+    </div>
+    <script>
+        document.getElementById('logs-content').scrollTop = 0;
+    </script>
+</body>
+</html>"""
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+        self.end_headers()
+        self.wfile.write(html_code.encode('utf-8'))
+
+    def check_admin_auth(self) -> bool:
+        """Enforce cookie-based session authentication for admin panels."""
+        cookie_header = self.headers.get('Cookie', '')
+        session_id = None
+        for cookie in cookie_header.split(';'):
+            parts = cookie.strip().split('=', 1)
+            if len(parts) == 2 and parts[0] == 'admin_session':
+                session_id = parts[1]
+                break
+
+        if session_id and session_id in ADMIN_SESSIONS:
+            return True
+
+        parsed = urlparse(self.path)
+        if parsed.path == '/stats' or parsed.path == '/logs':
+            self.serve_login_page(parsed.path)
             return False
 
-        try:
-            encoded_credentials = auth_header.split(' ', 1)[1]
-            decoded_credentials = base64.b64decode(encoded_credentials).decode('utf-8')
-            username, password = decoded_credentials.split(':', 1)
-            if username == admin_user and password == admin_pass:
-                return True
-        except Exception:
-            pass
-
         self.send_response(401)
-        self.send_header('WWW-Authenticate', 'Basic realm="Admin Logs"')
+        self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
-        self.wfile.write(b"Unauthorized: Invalid admin credentials.")
+        self.wfile.write(json.dumps({"status": "error", "message": "Unauthorized: Session cookie is invalid or missing."}).encode('utf-8'))
         return False
 
     def do_GET(self):
@@ -1394,6 +2083,13 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.end_headers()
             return
 
+        # Serve secure /stats diagnostics page
+        if parsed.path == '/stats':
+            if not self.check_admin_auth():
+                return
+            self.serve_stats_page()
+            return
+
         # 1c. Uptime compatibility ping endpoint for Cloudflare Monitor worker
         if parsed.path == '/api/ping' or parsed.path == '/ping':
             print("[*] Received compatibility uptime ping from Cloudflare Monitor worker", flush=True)
@@ -1409,11 +2105,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/logs' or parsed.path == '/api/logs':
             if not self.check_admin_auth():
                 return
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
-            self.end_headers()
+            
+            raw_logs_content = ""
             try:
                 if os.path.exists(SEARCH_LOGS_FILE):
                     with open(SEARCH_LOGS_FILE, 'r', encoding='utf-8') as f:
@@ -1434,11 +2127,22 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     # Reverse the list of event blocks so that the latest events are at the top,
                     # while maintaining normal forward chronological order within each event!
                     reversed_events = reversed(events)
-                    self.wfile.write("".join(reversed_events).encode('utf-8'))
+                    raw_logs_content = "".join(reversed_events)
                 else:
-                    self.wfile.write(b"No search logs found yet.")
+                    raw_logs_content = "No search logs found yet."
             except Exception as e:
-                self.wfile.write(f"Error reading logs: {e}".encode('utf-8'))
+                raw_logs_content = f"Error reading logs: {e}"
+
+            if parsed.path == '/api/logs':
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
+                self.end_headers()
+                self.wfile.write(raw_logs_content.encode('utf-8'))
+            else:
+                import html
+                self.serve_logs_page(html.escape(raw_logs_content))
             return
 
         # 1c-3. Record search log silently for cached local searches & details page views & clicks
@@ -1939,6 +2643,41 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else ""
+
+        # Admin session login handler
+        if parsed.path == '/api/admin/login':
+            try:
+                data = json.loads(body)
+                user = data.get("username", "").strip()
+                password = data.get("password", "").strip()
+                
+                admin_user = os.getenv("ADMIN_USERNAME", "admin").strip()
+                admin_pass = os.getenv("ADMIN_PASSWORD", "admin123").strip()
+                
+                if user == admin_user and password == admin_pass:
+                    # Generate a secure session ID
+                    session_id = hashlib.sha256(os.urandom(32)).hexdigest()
+                    ADMIN_SESSIONS.add(session_id)
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Set-Cookie', f'admin_session={session_id}; Path=/; HttpOnly; SameSite=Lax')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "success"}).encode('utf-8'))
+                else:
+                    self.send_response(401)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({"status": "error", "message": "Invalid admin credentials"}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"status": "error", "message": str(e)}).encode('utf-8'))
+            return
 
         # 1. Native folder browser folder picker trigger
         if parsed.path == '/api/choose-folder':
