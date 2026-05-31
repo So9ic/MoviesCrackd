@@ -3177,17 +3177,23 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             import subprocess
             process = None
             try:
-                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                first_chunk = True
                 while True:
                     data = process.stdout.read(65536)
                     if not data:
+                        if first_chunk:
+                            # Read stderr to diagnose startup failures
+                            err_data = process.stderr.read()
+                            print(f"[!] FFMPEG failed to start stream. Stderr: {err_data.decode('utf-8', errors='ignore')}")
                         break
+                    first_chunk = False
                     try:
                         self.wfile.write(data)
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                         break
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[!] Exception starting ffmpeg remux stream: {e}")
             finally:
                 if process:
                     try:
@@ -4087,6 +4093,15 @@ def main():
                                                              
     """, flush=True)
     print("=== MoviesCrackd Standalone Web Downloader Server ===", flush=True)
+
+    # Set up static ffmpeg if globally missing (such as on Render or HuggingFace)
+    try:
+        import static_ffmpeg
+        print("[*] Initializing static-ffmpeg paths...", flush=True)
+        static_ffmpeg.add_paths()
+        print("[+] static-ffmpeg successfully configured!", flush=True)
+    except Exception as e:
+        print(f"[-] static-ffmpeg initialization skipped or failed: {e}", flush=True)
 
     # Initialize and pre-warm persistent trending marquee cache & midnight scheduler
     start_cache_scheduler()
