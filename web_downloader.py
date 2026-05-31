@@ -1202,7 +1202,6 @@ def force_refresh_trending_cache():
                         # If not already cached, pre-fetch and optimize it!
                         if not os.path.exists(cache_path):
                             from PIL import Image
-                            import requests
                             import io
                             headers = {'User-Agent': 'Mozilla/5.0'}
                             resp = requests.get(thumb_url, headers=headers, timeout=8)
@@ -3275,7 +3274,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 return
 
             try:
-                import requests
                 import direct_downloader
                 from batch_episodes import resolve_link
                 from direct_downloader import get_driveseed_download_url
