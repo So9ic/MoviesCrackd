@@ -3143,6 +3143,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             network_opts = []
             if is_url:
                 network_opts = [
+                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
+                    '-multiple_requests', '1',
                     '-seekable', '1',          # Critical: enables Range-request seeking for remote MKV cue tables
                     '-reconnect', '1',
                     '-reconnect_streamed', '1',
@@ -3152,8 +3154,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             cmd = ['ffmpeg'] + network_opts + [
                 '-fflags', '+fastseek+nobuffer', # Skip initial buffering/waiting
                 '-flags', '+low_delay',          # Enforce low latency stream starts
-                '-probesize', '1000000',         # Scan max 1MB for stream info (plenty for container headers)
-                '-analyzeduration', '1000000',   # Scan max 1 second to determine formats
+                '-probesize', '250000',          # Lowered from 1MB to 250KB for 4x faster stream analysis
+                '-analyzeduration', '250000',   # Lowered from 1s to 250ms to speed up startup
                 '-ss', str(ss_val),
                 '-i', file_path,
                 '-map', '0:v:0',

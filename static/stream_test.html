@@ -359,8 +359,8 @@
         </div>
 
         <div class="engine-toggle">
-          <button class="engine-btn" id="mode-direct" onclick="setMode('direct')">🚀 Direct</button>
-          <button class="engine-btn active" id="mode-compat" onclick="setMode('compat')">🛡️ Compatible</button>
+          <button class="engine-btn active" id="mode-direct" onclick="setMode('direct')">🚀 Direct</button>
+          <button class="engine-btn" id="mode-compat" onclick="setMode('compat')">🛡️ Compatible</button>
         </div>
       </div>
     </div>
@@ -403,7 +403,7 @@
     const loader  = document.getElementById('loading-overlay');
 
     let rawPath   = '';        // file path or URL to the source
-    let mode      = 'compat';  // 'compat' or 'direct'
+    let mode      = 'direct';  // 'direct' or 'compat'
     let seekBase  = 0;         // seconds offset we told ffmpeg to start from
     let duration  = 0;         // total media duration (from ffprobe)
     let dragging  = false;
