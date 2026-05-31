@@ -3155,23 +3155,49 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-timeout', '10000000',    # 10 second connection timeout in microseconds
                 ]
 
-            cmd = ['ffmpeg'] + network_opts + [
-                '-fflags', '+fastseek+nobuffer+discardcorrupt', # Skip buffering, discard corrupt packets
-                '-flags', '+low_delay',          # Enforce low latency stream starts
-                '-probesize', '250000',          # 250KB — just enough for container header detection
-                '-analyzeduration', '250000',    # 250ms analysis — we manually map streams so no need for more
-                '-thread_queue_size', '512',      # Prevent input thread starvation on slow networks
-                '-ss', str(ss_val),
-                '-i', file_path,
-                '-map', '0:v:0',
-                '-map', '0:a:0',
-            ] + video_opts + audio_opts + [
-                '-avoid_negative_ts', 'make_zero', # Prevent negative timestamps from corrupting fMP4 init
-                '-async', '1',                     # Force audio sync to video timestamps
-                '-f', 'mp4',
-                '-movflags', 'frag_keyframe+empty_moov+default_base_moof+faststart',
-                'pipe:1'
-            ]
+            # For local files: -ss BEFORE -i = fast input-level seeking via keyframe index
+            # For remote URLs: -ss AFTER -i = accurate output-level seeking (guaranteed to work
+            #   even when remote server doesn't support Range requests or container lacks index)
+            if is_url:
+                # Output-level seeking: FFmpeg reads from the start but discards frames until ss_val.
+                # Slower but 100% reliable for remote HTTP sources like googleusercontent.
+                cmd = ['ffmpeg'] + network_opts + [
+                    '-fflags', '+nobuffer+discardcorrupt',
+                    '-flags', '+low_delay',
+                    '-probesize', '500000',          # 500KB — need more for remote to find stream info
+                    '-analyzeduration', '500000',
+                    '-thread_queue_size', '512',
+                    '-i', file_path,                 # Input FIRST
+                    '-ss', str(ss_val),              # Then seek in the decoded stream (output-level)
+                    '-map', '0:v:0',
+                    '-map', '0:a:0',
+                ] + video_opts + audio_opts + [
+                    '-avoid_negative_ts', 'make_zero',
+                    '-frag_duration', '1000000',     # 1 second fragments for faster initial playback
+                    '-async', '1',
+                    '-f', 'mp4',
+                    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+                    'pipe:1'
+                ]
+            else:
+                # Input-level seeking: instant keyframe jump for local files with index tables
+                cmd = ['ffmpeg'] + [
+                    '-fflags', '+fastseek+nobuffer+discardcorrupt',
+                    '-flags', '+low_delay',
+                    '-probesize', '250000',
+                    '-analyzeduration', '250000',
+                    '-thread_queue_size', '512',
+                    '-ss', str(ss_val),              # Seek BEFORE input (fast input-level seek)
+                    '-i', file_path,
+                    '-map', '0:v:0',
+                    '-map', '0:a:0',
+                ] + video_opts + audio_opts + [
+                    '-avoid_negative_ts', 'make_zero',
+                    '-async', '1',
+                    '-f', 'mp4',
+                    '-movflags', 'frag_keyframe+empty_moov+default_base_moof+faststart',
+                    'pipe:1'
+                ]
             
             self.send_response(200)
             self.send_header('Content-Type', 'video/mp4')

@@ -410,6 +410,8 @@
     let hideTimer = null;
     let activeTab = 'local';
     let downloads = [];
+    let seekPending = false;   // true between doSeek() and first real frame after seek
+    let seekVerifyTimer = null; // watchdog to detect failed seeks
 
     /* ── Helpers ── */
     const pad = n => String(Math.floor(n)).padStart(2, '0');
@@ -427,6 +429,13 @@
     function loadStream(path, ss, m, autoPlay = true) {
       loader.classList.add('visible');
       seekBase = ss;
+      seekPending = true;
+      
+      // Immediately update the UI to show where we're seeking to
+      slider.value = ss;
+      slider.max = duration || ss;
+      timeLbl.textContent = `${fmt(ss)} / ${fmt(duration)}`;
+      
       video.src = streamUrl(path, ss, m);
       video.load();
       if (autoPlay) {
@@ -435,6 +444,23 @@
           video.removeEventListener('canplay', playHandler);
         };
         video.addEventListener('canplay', playHandler);
+      }
+      
+      // Seek verification watchdog: if after 8 seconds the video.currentTime is still
+      // progressing from near 0 while seekBase is large, FFmpeg likely failed to seek.
+      // Reset seekBase to 0 to keep the UI honest.
+      clearTimeout(seekVerifyTimer);
+      if (ss > 5) {
+        seekVerifyTimer = setTimeout(() => {
+          // If video has been playing for a few seconds and currentTime is small
+          // relative to seekBase, the FFmpeg seek likely failed.
+          if (video.currentTime > 2 && video.currentTime < 10 && seekBase > 30) {
+            console.warn(`[Seek Verify] FFmpeg seek to ${ss}s likely failed. ` +
+              `Video currentTime=${video.currentTime.toFixed(1)}s. Resetting seekBase to 0.`);
+            seekBase = 0;
+          }
+          seekPending = false;
+        }, 8000);
       }
     }
 
@@ -449,8 +475,18 @@
     /* ── Timeline sync ── */
     video.addEventListener('timeupdate', () => {
       if (dragging) return;
-      // Don't update timeline until video is actually decoding frames and has started advancing
-      if (video.readyState < 3 || video.currentTime === 0) return;
+      // Wait until video has enough data to play (readyState >= 3 = HAVE_FUTURE_DATA)
+      if (video.readyState < 3) return;
+      
+      // Once we get a real timeupdate after a seek, mark seek as complete
+      if (seekPending && video.currentTime > 0.1) {
+        seekPending = false;
+        clearTimeout(seekVerifyTimer);
+      }
+      
+      // During seek transition, keep showing the target position
+      if (seekPending) return;
+      
       const elapsed = seekBase + video.currentTime;
       const total   = duration || elapsed;
       slider.max   = total;
