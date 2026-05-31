@@ -3361,7 +3361,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 
             segment_duration = 5.0  # optimal 5-second segment size for instant latency
             import math
-            import urllib.parse
             total_segments = int(math.ceil(duration / segment_duration))
 
             # Generate dynamic M3U8 index
