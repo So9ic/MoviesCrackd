@@ -1830,6 +1830,82 @@
       document.querySelector('.tabs-container').style.display = 'none';
     }
 
+    function startStream(url) {
+      url = decodeURIComponent(url);
+      
+      // 1. Create a beautiful loading overlay on the document body
+      const loader = document.createElement('div');
+      loader.id = 'stream-resolver-loader';
+      loader.style.cssText = `
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(20px);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        font-family: 'Outfit', sans-serif;
+        color: #fff;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      `;
+      
+      loader.innerHTML = `
+        <div style="
+          width: 64px;
+          height: 64px;
+          border: 5px solid rgba(255, 255, 255, 0.1);
+          border-top-color: #a855f7;
+          border-radius: 50%;
+          animation: spin 0.8s linear infinite;
+          box-shadow: 0 0 30px rgba(168, 85, 247, 0.3);
+        "></div>
+        <div style="font-size: 1.25rem; font-weight: 700; background: linear-gradient(135deg, #fff, #a855f7); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">
+          Resolving Premium Direct Stream…
+        </div>
+        <div style="font-size: 0.88rem; color: rgba(255,255,255,0.6); max-width: 320px; text-align: center; line-height: 1.5;">
+          Bypassing shortener filters & DriveSeed to fetch the direct streaming source. Please hold on…
+        </div>
+        <style>
+          @keyframes spin { to { transform: rotate(360deg); } }
+        </style>
+      `;
+      
+      document.body.appendChild(loader);
+      // Trigger reflow for transition
+      loader.offsetHeight;
+      loader.style.opacity = '1';
+      
+      // 2. Fetch the resolved streamable URL from our new API
+      fetch(`/api/resolve-stream?url=${encodeURIComponent(url)}`)
+        .then(r => {
+          if (!r.ok) throw new Error("Resolution failed on server side.");
+          return r.json();
+        })
+        .then(data => {
+          // Fade out and remove loader
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 300);
+          
+          if (!data.url) {
+            alert("Could not resolve streamable URL.");
+            return;
+          }
+          
+          // Open the stream test page in a new window/tab, passing url and name
+          const streamTestUrl = `/static/stream_test.html?url=${encodeURIComponent(data.url)}&name=${encodeURIComponent(data.name || 'Cinema Stream')}`;
+          window.open(streamTestUrl, '_blank');
+        })
+        .catch(err => {
+          loader.style.opacity = '0';
+          setTimeout(() => loader.remove(), 300);
+          alert("Error resolving direct stream: " + err.message);
+        });
+    }
+
     // Download API communication handlers
     function startDownload(url, optionTitle, buttonText) {
       url = decodeURIComponent(url);
@@ -1953,16 +2029,47 @@
             // Right side content depends on state
             let rightContent = '';
             if (dl.resolved_url) {
+              const filenameLower = (dl.filename || '').toLowerCase();
+              const isTelegram = dl.method === 'TELEGRAM';
+              const isMedia = filenameLower.endsWith('.mkv') || filenameLower.endsWith('.mp4');
+              const isZip = filenameLower.endsWith('.zip');
+
+              let playBtn = '';
+              if (!isZip) {
+                if (isTelegram) {
+                  playBtn = `
+                    <button class="dl-play-btn" style="background: rgba(255, 255, 255, 0.05); border: 1px solid rgba(255, 255, 255, 0.1); color: var(--text-dim); padding: 8px 14px; border-radius: 8px; margin-left: 8px; font-weight: 700; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: all 0.2s ease;" onclick="alert('Can\\\'t stream directly: this is a Telegram file. Please download it first!')">
+                      <span>▶</span> Play
+                    </button>
+                  `;
+                } else if (isMedia) {
+                  // Premium purple play button — open streaming player directly with pre-resolved URL
+                  playBtn = `
+                    <button class="dl-play-btn" style="background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.3); color: #c084fc; padding: 8px 14px; border-radius: 8px; margin-left: 8px; font-weight: 700; font-size: 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; transition: all 0.2s ease;" onmouseover="this.style.background='#7c3aed'; this.style.color='#ffffff';" onmouseout="this.style.background='rgba(168, 85, 247, 0.15)'; this.style.color='#c084fc';" onclick="window.open('/static/stream_test.html?url=${encodeURIComponent(dl.resolved_url)}&name=${encodeURIComponent(dl.filename)}', '_blank');">
+                      <span>▶</span> Play
+                    </button>
+                  `;
+                }
+              }
+
               // Completed with resolved URL — show download button
               if (dl.size) {
                 rightContent = `
-                  <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
-                    <span class="dl-btn-left">☁ Download to Device</span>
-                    <span class="dl-btn-right">(${dl.size})</span>
-                  </a>
+                  <div style="display: flex; align-items: center;">
+                    <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
+                      <span class="dl-btn-left">☁ Download to Device</span>
+                      <span class="dl-btn-right">(${dl.size})</span>
+                    </a>
+                    ${playBtn}
+                  </div>
                 `;
               } else {
-                rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
+                rightContent = `
+                  <div style="display: flex; align-items: center;">
+                    <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>
+                    ${playBtn}
+                  </div>
+                `;
               }
             } else if (dl.state === 3) {
               // Failed — show retry button

@@ -3027,6 +3027,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 content_type = 'application/octet-stream'
                 if local_path.endswith('.css'):
                     content_type = 'text/css'
+                elif local_path.endswith('.html'):
+                    content_type = 'text/html'
                 elif local_path.endswith('.js'):
                     content_type = 'application/javascript'
                 elif local_path.endswith('.png'):
@@ -3047,6 +3049,405 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     return
                 except Exception:
                     pass
+
+        # 1d-bis. Serve downloaded media files with full HTTP 206 Range Support (instant seek/scrub)
+        if parsed.path == '/api/stream-file':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            if not file_path or not os.path.exists(file_path) or not os.path.isfile(file_path):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Media file not found or still queued.")
+                return
+
+            size = os.path.getsize(file_path)
+            range_header = self.headers.get('Range')
+            
+            start = 0
+            end = size - 1
+            
+            if range_header:
+                match = re.search(r'bytes=(\d+)-(\d*)', range_header)
+                if match:
+                    start = int(match.group(1))
+                    if match.group(2):
+                        end = int(match.group(2))
+            
+            if start >= size:
+                self.send_response(416)
+                self.send_header('Content-Range', f'bytes */{size}')
+                self.end_headers()
+                return
+            
+            if end >= size:
+                end = size - 1
+                
+            length = end - start + 1
+            
+            self.send_response(206 if range_header else 200)
+            self.send_header('Content-Type', 'video/mp4' if file_path.endswith('.mp4') else 'video/x-matroska')
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            self.send_header('Content-Length', str(length))
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            
+            try:
+                with open(file_path, 'rb') as f:
+                    f.seek(start)
+                    bytes_to_send = length
+                    chunk_size = 64 * 1024
+                    while bytes_to_send > 0:
+                        chunk = f.read(min(chunk_size, bytes_to_send))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        bytes_to_send -= len(chunk)
+            except Exception:
+                pass
+            return
+
+        # 1d-ter. On-the-fly video remuxer/transcoder to stream Matroska (MKV) to standard web MP4 (0% CPU in copy mode)
+        if parsed.path == '/api/stream-remux':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            ss = query.get('ss', ['0'])[0]
+            mode = query.get('mode', ['direct'])[0] # 'direct' (copy video) or 'compat' (transcode HEVC to H.264)
+            
+            if not file_path:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing path parameter")
+                return
+
+            is_url = file_path.startswith('http://') or file_path.startswith('https://')
+            if not is_url:
+                if not os.path.exists(file_path) or not os.path.isfile(file_path):
+                    self.send_response(404)
+                    self.end_headers()
+                    self.wfile.write(b"Local media file not found.")
+                    return
+
+            try:
+                ss_val = float(ss)
+            except ValueError:
+                ss_val = 0.0
+
+            # Configure video encoding parameters based on playback compatibility mode
+            if mode == 'compat':
+                video_opts = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-tune', 'zerolatency']
+            else:
+                video_opts = ['-c:v', 'copy']
+
+            # Configure input options for remote streams — matching proven terminal test
+            network_opts = []
+            if is_url:
+                network_opts = [
+                    '-seekable', '1',          # Critical: enables Range-request seeking for remote MKV cue tables
+                    '-reconnect', '1',
+                    '-reconnect_streamed', '1',
+                    '-reconnect_delay_max', '5',
+                ]
+
+            cmd = ['ffmpeg'] + network_opts + [
+                '-fflags', '+fastseek+nobuffer', # Skip initial buffering/waiting
+                '-flags', '+low_delay',          # Enforce low latency stream starts
+                '-probesize', '1000000',         # Scan max 1MB for stream info (plenty for container headers)
+                '-analyzeduration', '1000000',   # Scan max 1 second to determine formats
+                '-ss', str(ss_val),
+                '-i', file_path,
+                '-map', '0:v:0',
+                '-map', '0:a:0',
+            ] + video_opts + [
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-ac', '2',
+                '-async', '1',     # Force audio alignment to video timestamps to prevent drift
+                '-f', 'mp4',
+                '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+                'pipe:1'
+            ]
+            
+            self.send_response(200)
+            self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+
+            import subprocess
+            process = None
+            try:
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                while True:
+                    data = process.stdout.read(65536)
+                    if not data:
+                        break
+                    try:
+                        self.wfile.write(data)
+                    except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                        break
+            except Exception:
+                pass
+            finally:
+                if process:
+                    try:
+                        process.kill()
+                        process.wait(timeout=2)
+                    except Exception:
+                        pass
+            return
+
+        # 1d-quater. Fetch media file duration using ffprobe for exact seeker calculation
+        if parsed.path == '/api/duration':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            if not file_path:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing path parameter")
+                return
+
+            is_url = file_path.startswith('http://') or file_path.startswith('https://')
+            if not is_url and not os.path.exists(file_path):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Local media file not found.")
+                return
+
+            import subprocess
+            if is_url:
+                cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    '-seekable', '1',
+                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
+                    file_path
+                ]
+            else:
+                cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    file_path
+                ]
+            try:
+                duration_bytes = subprocess.check_output(cmd, timeout=5)
+                duration = float(duration_bytes.decode('utf-8').strip())
+            except Exception:
+                duration = 5400.0  # fallback to 1h30m if metadata reading fails
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(f'{{"duration": {duration}}}'.encode('utf-8'))
+            return
+
+        # 1d-quinquies. Resolve a shortener or driveseed link into a direct streamable video URL
+        if parsed.path == '/api/resolve-stream':
+            query = parse_qs(parsed.query)
+            url = query.get('url', [None])[0]
+            if not url:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing url parameter")
+                return
+
+            try:
+                import requests
+                import direct_downloader
+                from batch_episodes import resolve_link
+                from direct_downloader import get_driveseed_download_url
+                
+                # Setup session
+                session = requests.Session()
+                session.headers.update(direct_downloader.HEADERS)
+                direct_downloader.SESSION = session
+                
+                ds_url = url
+                if "modpro.blog" in url or "animeflix" in url or "getlink" in url:
+                    link_dict = {"url": url, "type": "shortener", "name": "Video Link"}
+                    if "animeflix" in url or "getlink" in url:
+                        link_dict["type"] = "redirect"
+                    try:
+                        _, name, resolved_url = resolve_link(0, link_dict, session=session)
+                        if resolved_url:
+                            ds_url = resolved_url
+                    except Exception:
+                        pass
+                
+                # Try to extract the final streamable direct URL
+                try:
+                    dl_url, fname, method = get_driveseed_download_url(ds_url)
+                except Exception:
+                    # Fallback to returned ds_url if driveseed extract fails
+                    dl_url = ds_url
+                    fname = ds_url.split('/')[-1] or "Stream Link"
+
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({"url": dl_url, "name": fname}).encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(str(e).encode('utf-8'))
+            return
+
+        # 1d-quinquies. Dynamic HLS Playlist Generator (.m3u8) for on-demand Youtube-like chunk loading!
+        if parsed.path == '/api/hls-playlist':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            mode = query.get('mode', ['compat'])[0]
+            
+            if not file_path:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Missing path parameter")
+                return
+
+            is_url = file_path.startswith('http://') or file_path.startswith('https://')
+            if not is_url and not os.path.exists(file_path):
+                self.send_response(404)
+                self.end_headers()
+                self.wfile.write(b"Local media file not found.")
+                return
+
+            # Get duration
+            import subprocess
+            if is_url:
+                cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    '-seekable', '1',
+                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
+                    file_path
+                ]
+            else:
+                cmd = [
+                    'ffprobe',
+                    '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    file_path
+                ]
+            try:
+                duration_bytes = subprocess.check_output(cmd, timeout=5)
+                duration = float(duration_bytes.decode('utf-8').strip())
+            except Exception:
+                duration = 5400.0  # fallback to 1h30m
+
+            segment_duration = 5.0  # optimal 5-second segment size for instant latency
+            import math
+            import urllib.parse
+            total_segments = int(math.ceil(duration / segment_duration))
+
+            # Generate dynamic M3U8 index
+            lines = [
+                "#EXTM3U",
+                "#EXT-X-VERSION:3",
+                f"#EXT-X-TARGETDURATION:{int(segment_duration)}",
+                "#EXT-X-MEDIA-SEQUENCE:0"
+            ]
+            for i in range(total_segments):
+                lines.append(f"#EXTINF:{segment_duration:.1f},")
+                lines.append(f"/api/hls-segment?path={urllib.parse.quote(file_path)}&index={i}&mode={mode}")
+            lines.append("#EXT-X-ENDLIST")
+
+            playlist_content = "\n".join(lines)
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/x-mpegURL')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+            self.wfile.write(playlist_content.encode('utf-8'))
+            return
+
+        # 1d-sexies. Dynamic HLS Segment (.ts) Transcoder - only encodes 5 seconds at a time!
+        if parsed.path == '/api/hls-segment':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            index = int(query.get('index', ['0'])[0])
+            mode = query.get('mode', ['compat'])[0]
+
+            if not file_path:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            segment_duration = 5.0
+            start_time = index * segment_duration
+
+            # Speed-optimized options for compatible on-the-fly H.264 transcoding
+            if mode == 'compat':
+                # Fast video transcode + audio transcode. We force H.264 Baseline for maximum browser speed!
+                video_opts = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '25', '-tune', 'fastdecode', '-profile:v', 'baseline', '-level', '3.0']
+            else:
+                # Video copy mode (0% CPU for H.264 files)
+                video_opts = ['-c:v', 'copy']
+
+            is_url = file_path.startswith('http://') or file_path.startswith('https://')
+            network_opts = []
+            if is_url:
+                network_opts = [
+                    '-seekable', '1',
+                    '-reconnect', '1',
+                    '-reconnect_streamed', '1',
+                    '-reconnect_delay_max', '5'
+                ]
+
+            cmd = [
+                'ffmpeg',
+            ] + network_opts + [
+                '-fflags', '+fastseek+nobuffer', # Skip initial buffering/waiting
+                '-flags', '+low_delay',          # Enforce low latency stream starts
+                '-probesize', '1000000',         # Scan max 1MB for stream info
+                '-analyzeduration', '1000000',   # Scan max 1 second to determine formats
+                '-ss', f"{start_time:.2f}",
+                '-t', f"{segment_duration:.2f}",
+                '-i', file_path
+            ] + video_opts + [
+                '-c:a', 'aac',
+                '-b:a', '96k',
+                '-ac', '2',
+                '-async', '1',                   # Prevent audio/video sync drift
+                '-f', 'mpegts',
+                'pipe:1'
+            ]
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'video/MP2T')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.send_header('Cache-Control', 'no-cache')
+            self.end_headers()
+
+            import subprocess
+            process = None
+            try:
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                chunk_size = 64 * 1024
+                while True:
+                    data = process.stdout.read(chunk_size)
+                    if not data:
+                        break
+                    self.wfile.write(data)
+            except Exception:
+                pass
+            finally:
+                if process:
+                    try:
+                        process.terminate()
+                        process.wait(timeout=1)
+                    except Exception:
+                        pass
+            return
 
         # 1e. Serve compressed WebP thumbnails with caching
         if parsed.path == '/api/thumbnail':
