@@ -3107,11 +3107,13 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 1d-ter. On-the-fly video remuxer/transcoder to stream Matroska (MKV) to standard web MP4 (0% CPU in copy mode)
+        # 1d-ter. On-the-fly video remuxer/transcoder to stream Matroska (MKV) to standard web MP4 (0% CPU in copy mode)
         if parsed.path == '/api/stream-remux':
             query = parse_qs(parsed.query)
             file_path = query.get('path', [None])[0]
             ss = query.get('ss', ['0'])[0]
             mode = query.get('mode', ['direct'])[0] # 'direct' (copy video) or 'compat' (transcode HEVC to H.264)
+            audio_track = query.get('audio_track', [None])[0]
             
             if not file_path:
                 self.send_response(400)
@@ -3155,6 +3157,12 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-timeout', '10000000',    # 10 second connection timeout in microseconds
                 ]
 
+            # Select audio track to map
+            if audio_track and audio_track.isdigit():
+                audio_map = f"0:{audio_track}"
+            else:
+                audio_map = "0:a:0"
+
             # Input-level seeking (-ss BEFORE -i) for both local and remote:
             # - Fast: FFmpeg uses the container index (MKV cues / MP4 moov) to jump directly
             # - Synced: audio and video start from the same keyframe, no A/V drift
@@ -3172,7 +3180,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-ss', str(ss_val),               # Input-level seek: FFmpeg sends HTTP Range to jump
                     '-i', file_path,
                     '-map', '0:v:0',
-                    '-map', '0:a:0',
+                    '-map', audio_map,
                 ] + video_opts + audio_opts + [
                     '-avoid_negative_ts', 'make_zero',
                     '-start_at_zero',                 # Normalize output PTS to start from 0
@@ -3191,7 +3199,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-ss', str(ss_val),
                     '-i', file_path,
                     '-map', '0:v:0',
-                    '-map', '0:a:0',
+                    '-map', audio_map,
                 ] + video_opts + audio_opts + [
                     '-avoid_negative_ts', 'make_zero',
                     '-start_at_zero',
@@ -3240,7 +3248,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         pass
             return
 
-        # 1d-quater. Fetch media file duration using ffprobe for exact seeker calculation
+        # 1d-quater. Fetch media file metadata (duration, audio tracks, subtitles) via ffprobe
         if parsed.path == '/api/duration':
             query = parse_qs(parsed.query)
             file_path = query.get('path', [None])[0]
@@ -3258,14 +3266,15 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 return
 
             import subprocess
+            import json
             if is_url:
                 cmd = [
                     'ffprobe',
                     '-v', 'error',
-                    '-show_entries', 'format=duration',
-                    '-of', 'default=noprint_wrappers=1:nokey=1',
-                    '-probesize', '100000',
-                    '-analyzeduration', '100000',
+                    '-show_entries', 'format=duration:stream=index,codec_type,codec_name:stream_tags=language,title',
+                    '-of', 'json',
+                    '-probesize', '1000000',
+                    '-analyzeduration', '1000000',
                     '-seekable', '1',
                     '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
                     file_path
@@ -3274,21 +3283,97 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 cmd = [
                     'ffprobe',
                     '-v', 'error',
-                    '-show_entries', 'format=duration',
-                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    '-show_entries', 'format=duration:stream=index,codec_type,codec_name:stream_tags=language,title',
+                    '-of', 'json',
                     file_path
                 ]
+
+            duration = 5400.0
+            audio_tracks = []
+            subtitle_tracks = []
+
             try:
-                duration_bytes = subprocess.check_output(cmd, timeout=8)
-                duration = float(duration_bytes.decode('utf-8').strip())
-            except Exception:
-                duration = 5400.0  # fallback to 1h30m if metadata reading fails
+                out = subprocess.check_output(cmd, timeout=8)
+                data = json.loads(out.decode('utf-8', errors='ignore'))
+                duration = float(data.get('format', {}).get('duration', 5400.0))
+                for stream in data.get('streams', []):
+                    stype = stream.get('codec_type')
+                    sindex = stream.get('index')
+                    tags = stream.get('tags', {})
+                    lang = tags.get('language', 'unknown')
+                    title = tags.get('title', '')
+                    
+                    if stype == 'audio':
+                        audio_tracks.append({
+                            'index': sindex,
+                            'language': lang,
+                            'title': title or f"Audio Track {len(audio_tracks) + 1} ({lang})"
+                        })
+                    elif stype == 'subtitle':
+                        subtitle_tracks.append({
+                            'index': sindex,
+                            'language': lang,
+                            'title': title or f"Subtitle Track {len(subtitle_tracks) + 1} ({lang})"
+                        })
+            except Exception as e:
+                print(f"[!] ffprobe metadata extraction failed: {e}")
 
             self.send_response(200)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(f'{{"duration": {duration}}}'.encode('utf-8'))
+            response_data = {
+                "duration": duration,
+                "audio_tracks": audio_tracks,
+                "subtitle_tracks": subtitle_tracks
+            }
+            self.wfile.write(json.dumps(response_data).encode('utf-8'))
+            return
+
+        # 1d-sexies-bis. Dynamic subtitle stream transcoder (converts to WebVTT on-the-fly)
+        if parsed.path == '/api/subtitles':
+            query = parse_qs(parsed.query)
+            file_path = query.get('path', [None])[0]
+            track_index = query.get('track', [None])[0]
+
+            if not file_path or not track_index:
+                self.send_response(400)
+                self.end_headers()
+                return
+
+            is_url = file_path.startswith('http://') or file_path.startswith('https://')
+            if not is_url and not os.path.exists(file_path):
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            network_opts = []
+            if is_url:
+                network_opts = [
+                    '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
+                    '-seekable', '1',
+                    '-timeout', '5000000',
+                ]
+
+            cmd = ['ffmpeg'] + network_opts + [
+                '-v', 'error',
+                '-i', file_path,
+                '-map', f'0:{track_index}',
+                '-f', 'webvtt',
+                'pipe:1'
+            ]
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/vtt; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+
+            import subprocess
+            try:
+                vtt_content = subprocess.check_output(cmd, timeout=8)
+                self.wfile.write(vtt_content)
+            except Exception:
+                self.wfile.write(b"WEBVTT\n\n")
             return
 
         # 1d-quinquies. Resolve a shortener or driveseed link into a direct streamable video URL
