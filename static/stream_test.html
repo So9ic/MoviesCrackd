@@ -446,21 +446,18 @@
         video.addEventListener('canplay', playHandler);
       }
       
-      // Seek verification watchdog: if after 8 seconds the video.currentTime is still
-      // progressing from near 0 while seekBase is large, FFmpeg likely failed to seek.
-      // Reset seekBase to 0 to keep the UI honest.
+      // Seek verification watchdog: if after 6 seconds the video is playing but
+      // currentTime is tiny while seekBase is large, FFmpeg's input-level seek failed.
       clearTimeout(seekVerifyTimer);
       if (ss > 5) {
         seekVerifyTimer = setTimeout(() => {
-          // If video has been playing for a few seconds and currentTime is small
-          // relative to seekBase, the FFmpeg seek likely failed.
-          if (video.currentTime > 2 && video.currentTime < 10 && seekBase > 30) {
+          if (video.currentTime > 1 && video.currentTime < 8 && seekBase > 30) {
             console.warn(`[Seek Verify] FFmpeg seek to ${ss}s likely failed. ` +
-              `Video currentTime=${video.currentTime.toFixed(1)}s. Resetting seekBase to 0.`);
+              `video.currentTime=${video.currentTime.toFixed(1)}s. Resetting seekBase to 0.`);
             seekBase = 0;
           }
           seekPending = false;
-        }, 8000);
+        }, 6000);
       }
     }
 
@@ -470,21 +467,20 @@
 
     video.addEventListener('playing', () => {
       loader.classList.remove('visible');
+      // Only unlock the timeline once actual frames are rendering ('playing' event),
+      // not during buffering. This prevents the 3-5s timeline drift.
+      if (seekPending) {
+        seekPending = false;
+        clearTimeout(seekVerifyTimer);
+      }
     });
 
     /* ── Timeline sync ── */
     video.addEventListener('timeupdate', () => {
       if (dragging) return;
-      // Wait until video has enough data to play (readyState >= 3 = HAVE_FUTURE_DATA)
       if (video.readyState < 3) return;
       
-      // Once we get a real timeupdate after a seek, mark seek as complete
-      if (seekPending && video.currentTime > 0.1) {
-        seekPending = false;
-        clearTimeout(seekVerifyTimer);
-      }
-      
-      // During seek transition, keep showing the target position
+      // During seek transition, keep showing the target position (don't let stale data snap it back)
       if (seekPending) return;
       
       const elapsed = seekBase + video.currentTime;

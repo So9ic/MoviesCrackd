@@ -3155,44 +3155,46 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-timeout', '10000000',    # 10 second connection timeout in microseconds
                 ]
 
-            # For local files: -ss BEFORE -i = fast input-level seeking via keyframe index
-            # For remote URLs: -ss AFTER -i = accurate output-level seeking (guaranteed to work
-            #   even when remote server doesn't support Range requests or container lacks index)
+            # Input-level seeking (-ss BEFORE -i) for both local and remote:
+            # - Fast: FFmpeg uses the container index (MKV cues / MP4 moov) to jump directly
+            # - Synced: audio and video start from the same keyframe, no A/V drift
+            # Key difference for remote URLs:
+            # - NO +fastseek (that flag uses byte-level offset seeking which fails over HTTP)
+            # - Larger probesize (5MB) so FFmpeg can read the MKV cue table via Range requests
+            # - -seekable 1 in network_opts enables FFmpeg's HTTP Range-request seeking
             if is_url:
-                # Output-level seeking: FFmpeg reads from the start but discards frames until ss_val.
-                # Slower but 100% reliable for remote HTTP sources like googleusercontent.
                 cmd = ['ffmpeg'] + network_opts + [
-                    '-fflags', '+nobuffer+discardcorrupt',
+                    '-fflags', '+nobuffer+discardcorrupt',   # No +fastseek! It breaks HTTP Range seeking
                     '-flags', '+low_delay',
-                    '-probesize', '500000',          # 500KB — need more for remote to find stream info
-                    '-analyzeduration', '500000',
+                    '-probesize', '5000000',          # 5MB — enough for FFmpeg to read remote MKV cue table
+                    '-analyzeduration', '3000000',    # 3 seconds — more time to parse remote container
                     '-thread_queue_size', '512',
-                    '-i', file_path,                 # Input FIRST
-                    '-ss', str(ss_val),              # Then seek in the decoded stream (output-level)
+                    '-ss', str(ss_val),               # Input-level seek: FFmpeg sends HTTP Range to jump
+                    '-i', file_path,
                     '-map', '0:v:0',
                     '-map', '0:a:0',
                 ] + video_opts + audio_opts + [
                     '-avoid_negative_ts', 'make_zero',
-                    '-frag_duration', '1000000',     # 1 second fragments for faster initial playback
+                    '-start_at_zero',                 # Normalize output PTS to start from 0
                     '-async', '1',
                     '-f', 'mp4',
                     '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
                     'pipe:1'
                 ]
             else:
-                # Input-level seeking: instant keyframe jump for local files with index tables
                 cmd = ['ffmpeg'] + [
-                    '-fflags', '+fastseek+nobuffer+discardcorrupt',
+                    '-fflags', '+fastseek+nobuffer+discardcorrupt',  # +fastseek OK for local files
                     '-flags', '+low_delay',
                     '-probesize', '250000',
                     '-analyzeduration', '250000',
                     '-thread_queue_size', '512',
-                    '-ss', str(ss_val),              # Seek BEFORE input (fast input-level seek)
+                    '-ss', str(ss_val),
                     '-i', file_path,
                     '-map', '0:v:0',
                     '-map', '0:a:0',
                 ] + video_opts + audio_opts + [
                     '-avoid_negative_ts', 'make_zero',
+                    '-start_at_zero',
                     '-async', '1',
                     '-f', 'mp4',
                     '-movflags', 'frag_keyframe+empty_moov+default_base_moof+faststart',
