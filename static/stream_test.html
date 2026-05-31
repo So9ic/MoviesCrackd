@@ -8,7 +8,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 
   <style>
     :root {
@@ -411,8 +410,6 @@
     let hideTimer = null;
     let activeTab = 'local';
     let downloads = [];
-    let hls       = null;      // Hls.js player reference for dynamic segment loading
-    let currentPlayUrl = '';  // Tracks active HLS playlist URL
 
     /* ── Helpers ── */
     const pad = n => String(Math.floor(n)).padStart(2, '0');
@@ -428,83 +425,16 @@
 
     /* ── Video loading ── */
     function loadStream(path, ss, m, autoPlay = true) {
-      const playUrl = `/api/hls-playlist?path=${encodeURIComponent(path)}&mode=${m}`;
-      
-      // If same stream is already playing, seek natively and immediately
-      if (currentPlayUrl === playUrl && hls) {
-        video.currentTime = ss;
-        if (autoPlay) {
-          video.play().catch(() => {});
-        }
-        return;
-      }
-
-      currentPlayUrl = playUrl;
       loader.classList.add('visible');
-      seekBase = 0; // HLS utilizes native currentTime offsets directly
-
-      if (Hls.isSupported()) {
-        if (hls) {
-          hls.destroy();
-        }
-        hls = new Hls({
-          maxBufferSize: 15 * 1024 * 1024, // Prebuffer up to 15MB chunks
-          maxBufferLength: 30,             // Maintain a 30-second sliding buffer
-          enableWorker: true,
-          lowLatencyMode: true
-        });
-        hls.loadSource(playUrl);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          if (ss > 0) {
-            video.currentTime = ss;
-          }
-          if (autoPlay) {
-            video.play().catch(() => {});
-          }
-        });
-
-        // Auto recover from fatal playback errors
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          if (data.fatal) {
-            switch (data.type) {
-              case Hls.ErrorTypes.NETWORK_ERROR:
-                hls.startLoad();
-                break;
-              case Hls.ErrorTypes.MEDIA_ERROR:
-                hls.recoverMediaError();
-                break;
-              default:
-                break;
-            }
-          }
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        // Native HLS fallback (Safari/iOS devices)
-        video.src = playUrl;
-        if (ss > 0) {
-          const onMeta = () => {
-            video.currentTime = ss;
-            video.removeEventListener('loadedmetadata', onMeta);
-          };
-          video.addEventListener('loadedmetadata', onMeta);
-        }
-        if (autoPlay) {
+      seekBase = ss;
+      video.src = streamUrl(path, ss, m);
+      video.load();
+      if (autoPlay) {
+        const playHandler = () => {
           video.play().catch(() => {});
-        }
-      } else {
-        // Legacy fragmented MP4 pipe fallback
-        currentPlayUrl = '';
-        seekBase = ss;
-        video.src = streamUrl(path, ss, m);
-        video.load();
-        if (autoPlay) {
-          const playHandler = () => {
-            video.play().catch(() => {});
-            video.removeEventListener('canplay', playHandler);
-          };
-          video.addEventListener('canplay', playHandler);
-        }
+          video.removeEventListener('canplay', playHandler);
+        };
+        video.addEventListener('canplay', playHandler);
       }
     }
 
