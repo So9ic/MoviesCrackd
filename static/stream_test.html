@@ -324,7 +324,7 @@
 
   <!-- Fullscreen video player -->
   <div class="player-container">
-    <video id="cinema-video" autoplay></video>
+    <video id="cinema-video" autoplay preload="auto"></video>
   </div>
 
   <!-- Loading indicator -->
@@ -478,10 +478,15 @@
       doSeek(target);
     }
 
+    let seekDebounce = null;
     function doSeek(seconds) {
       if (!rawPath) return;
-      const wasPlaying = !video.paused;
-      loadStream(rawPath, seconds, mode, wasPlaying);
+      // Debounce rapid seeks (e.g. fast slider scrubbing) to avoid spawning many FFmpeg processes
+      clearTimeout(seekDebounce);
+      seekDebounce = setTimeout(() => {
+        const wasPlaying = !video.paused;
+        loadStream(rawPath, seconds, mode, wasPlaying);
+      }, 200);
     }
 
     /* ── Play / Pause ── */

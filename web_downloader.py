@@ -3133,13 +3133,17 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             except ValueError:
                 ss_val = 0.0
 
-            # Configure video encoding parameters based on playback compatibility mode
+            # Configure encoding parameters based on playback compatibility mode
             if mode == 'compat':
+                # Transcode: needed for HEVC/VP9 sources that browsers can't decode natively
                 video_opts = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-tune', 'zerolatency']
+                audio_opts = ['-c:a', 'aac', '-b:a', '128k', '-ac', '2']
             else:
+                # Direct copy: zero CPU usage, instant start — works for H.264+AAC sources
                 video_opts = ['-c:v', 'copy']
+                audio_opts = ['-c:a', 'copy']
 
-            # Configure input options for remote streams — matching proven terminal test
+            # Configure input options for remote streams
             network_opts = []
             if is_url:
                 network_opts = [
@@ -3149,32 +3153,35 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-reconnect', '1',
                     '-reconnect_streamed', '1',
                     '-reconnect_delay_max', '5',
+                    '-timeout', '10000000',    # 10 second connection timeout in microseconds
                 ]
 
             cmd = ['ffmpeg'] + network_opts + [
-                '-fflags', '+fastseek+nobuffer', # Skip initial buffering/waiting
+                '-fflags', '+fastseek+nobuffer+discardcorrupt', # Skip buffering, discard corrupt packets
                 '-flags', '+low_delay',          # Enforce low latency stream starts
-                '-probesize', '250000',          # Lowered from 1MB to 250KB for 4x faster stream analysis
-                '-analyzeduration', '250000',   # Lowered from 1s to 250ms to speed up startup
+                '-probesize', '250000',          # 250KB — just enough for container header detection
+                '-analyzeduration', '250000',    # 250ms analysis — we manually map streams so no need for more
+                '-thread_queue_size', '512',      # Prevent input thread starvation on slow networks
                 '-ss', str(ss_val),
                 '-i', file_path,
                 '-map', '0:v:0',
                 '-map', '0:a:0',
-            ] + video_opts + [
-                '-c:a', 'aac',
-                '-b:a', '128k',
-                '-ac', '2',
-                '-async', '1',     # Force audio alignment to video timestamps to prevent drift
+            ] + video_opts + audio_opts + [
+                '-avoid_negative_ts', 'make_zero', # Prevent negative timestamps from corrupting fMP4 init
+                '-async', '1',                     # Force audio sync to video timestamps
                 '-f', 'mp4',
-                '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+                '-movflags', 'frag_keyframe+empty_moov+default_base_moof+faststart',
                 'pipe:1'
             ]
             
             self.send_response(200)
             self.send_header('Content-Type', 'video/mp4')
+            self.send_header('Transfer-Encoding', 'chunked')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.send_header('Cache-Control', 'no-cache')
+            self.send_header('X-Content-Type-Options', 'nosniff')
             self.end_headers()
+            self.wfile.flush()  # Push headers to browser immediately — don't wait for data
 
             import subprocess
             process = None
@@ -3192,6 +3199,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     first_chunk = False
                     try:
                         self.wfile.write(data)
+                        self.wfile.flush()  # Push each chunk to browser immediately
                     except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                         break
             except Exception as e:
@@ -3229,6 +3237,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-v', 'error',
                     '-show_entries', 'format=duration',
                     '-of', 'default=noprint_wrappers=1:nokey=1',
+                    '-probesize', '100000',
+                    '-analyzeduration', '100000',
                     '-seekable', '1',
                     '-headers', 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36\r\n',
                     file_path
@@ -3242,7 +3252,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     file_path
                 ]
             try:
-                duration_bytes = subprocess.check_output(cmd, timeout=5)
+                duration_bytes = subprocess.check_output(cmd, timeout=8)
                 duration = float(duration_bytes.decode('utf-8').strip())
             except Exception:
                 duration = 5400.0  # fallback to 1h30m if metadata reading fails
