@@ -694,6 +694,16 @@
           let carry = new Uint8Array(0);
 
           while (true) {
+            // Read throttling: if we already have 60 seconds of video buffered ahead,
+            // wait before calling reader.read() to trigger TCP/HTTP backpressure.
+            while (true) {
+              if (this.ctrl.signal.aborted) break;
+              const ahead = this.getBufferedAhead(this.video.currentTime);
+              if (ahead < 60) break;
+              await new Promise(r => setTimeout(r, 500));
+            }
+            if (this.ctrl.signal.aborted) break;
+
             const { done, value } = await reader.read();
             if (done) break;
 
@@ -744,6 +754,18 @@
         return false;
       }
 
+      getBufferedAhead(t) {
+        if (!this.sb || !this.sb.buffered.length) return 0;
+        for (let i = 0; i < this.sb.buffered.length; i++) {
+          const s = this.sb.buffered.start(i);
+          const e = this.sb.buffered.end(i);
+          if (t >= s && t <= e) {
+            return e - t;
+          }
+        }
+        return 0;
+      }
+
       bufferedEnd() {
         if (!this.sb || !this.sb.buffered.length) return 0;
         let max = 0;
@@ -756,7 +778,7 @@
       /* ── Evict old buffer to cap memory (keep ±120s around current pos) ── */
       async evict(center) {
         if (!this.sb || this.sb.updating) return;
-        const lo = Math.max(0, center - 120), hi = center + 120;
+        const lo = Math.max(0, center - 60), hi = center + 120;
         for (let i = 0; i < this.sb.buffered.length; i++) {
           const s = this.sb.buffered.start(i), e = this.sb.buffered.end(i);
           if (e < lo || s > hi) {
@@ -884,6 +906,7 @@
       slider.max = total;
       slider.value = t;
       timeLbl.textContent = `${fmt(t)} / ${fmt(duration)}`;
+      engine.evict(t);
     });
 
     /* ── Slider interaction ── */
