@@ -3114,6 +3114,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             ss = query.get('ss', ['0'])[0]
             mode = query.get('mode', ['direct'])[0] # 'direct' (copy video) or 'compat' (transcode HEVC to H.264)
             audio_track = query.get('audio_track', [None])[0]
+            dur = query.get('dur', [None])[0]  # chunk duration in seconds (None = stream to end)
             
             if not file_path:
                 self.send_response(400)
@@ -3181,9 +3182,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-i', file_path,
                     '-map', '0:v:0',
                     '-map', audio_map,
-                ] + video_opts + audio_opts + [
+                ] + video_opts + audio_opts + (
+                    ['-t', dur] if dur else []
+                ) + [
                     '-avoid_negative_ts', 'make_zero',
-                    '-start_at_zero',                 # Normalize output PTS to start from 0
+                    '-start_at_zero',
                     '-async', '1',
                     '-f', 'mp4',
                     '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
@@ -3200,7 +3203,9 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-i', file_path,
                     '-map', '0:v:0',
                     '-map', audio_map,
-                ] + video_opts + audio_opts + [
+                ] + video_opts + audio_opts + (
+                    ['-t', dur] if dur else []
+                ) + [
                     '-avoid_negative_ts', 'make_zero',
                     '-start_at_zero',
                     '-async', '1',

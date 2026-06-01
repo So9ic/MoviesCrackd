@@ -615,37 +615,47 @@
 
   <script>
     /* ═══════════════════════════════════════════════════════════════
-       MSE-Based Streaming Engine — caches chunks in-browser like
-       Netflix/YouTube. Seeking within buffered data is instant.
+       Chunked MSE Streaming Engine
+       - Movie split into CHUNK_SECS-second fixed segments
+       - Downloads current chunk, prefetches next one ahead
+       - Instant seek if chunk already cached, else fetch that chunk
+       - Each chunk: stripped init (reuse chunk-0 moov), media appended
+         with timestampOffset = chunkStart so PTS maps to real movie time
        ═══════════════════════════════════════════════════════════════ */
+
+    const CHUNK_SECS   = 60;   // seconds per chunk (1 minute)
+    const PREFETCH_NUM = 2;    // how many chunks to keep ahead of playback
+    const MSE_MIME     = 'video/mp4; codecs="avc1.640028,mp4a.40.2"';
 
     class StreamEngine {
       constructor(videoEl) {
-        this.video = videoEl;
-        this.ms = null;
-        this.sb = null;
-        this.initSeg = null;
-        this.ctrl = null;
-        this.queue = [];
-        this.busy = false;
-        this.mimeType = '';
-        this._createMS();
+        this.video      = videoEl;
+        this.ms         = null;
+        this.sb         = null;
+        this.initSeg    = null;   // moov from chunk 0 — reused for all chunks
+        this.queue      = [];
+        this.busy       = false;
+        this.cached     = new Set();   // chunk indices fully appended
+        this.activeCtrl = null;
+        this.prefTimer  = null;
+        this.duration   = 0;
+        this._mk();
       }
 
-      _createMS() {
+      /* ── MediaSource lifecycle ── */
+      _mk() {
         this.ms = new MediaSource();
         this.video.src = URL.createObjectURL(this.ms);
       }
-
-      ready() {
+      _open() {
         return new Promise(r => {
           if (this.ms.readyState === 'open') return r();
           this.ms.addEventListener('sourceopen', r, { once: true });
         });
       }
 
-      /* ── Queue-safe SourceBuffer append ── */
-      _enqueue(data) {
+      /* ── SourceBuffer queue (one append at a time) ── */
+      _enq(data) {
         return new Promise((ok, fail) => {
           this.queue.push({ data, ok, fail });
           this._drain();
@@ -655,17 +665,17 @@
         if (this.busy || !this.queue.length || !this.sb || this.sb.updating) return;
         this.busy = true;
         const { data, ok, fail } = this.queue.shift();
-        const done = () => { rm(); this.busy = false; ok(); this._drain(); };
-        const err = () => { rm(); this.busy = false; fail(); this._drain(); };
-        const rm = () => { this.sb.removeEventListener('updateend', done); this.sb.removeEventListener('error', err); };
+        const rm  = () => { this.sb.removeEventListener('updateend', done); this.sb.removeEventListener('error', err); };
+        const done = () => { rm(); this.busy = false; ok();   this._drain(); };
+        const err  = () => { rm(); this.busy = false; fail(); this._drain(); };
         this.sb.addEventListener('updateend', done);
-        this.sb.addEventListener('error', err);
+        this.sb.addEventListener('error',     err);
         try { this.sb.appendBuffer(data); }
-        catch (e) { rm(); this.busy = false; fail(e); this._drain(); }
+        catch(e) { rm(); this.busy = false; fail(e); this._drain(); }
       }
 
-      /* ── Parse fMP4 box headers to split init (ftyp+moov) from media (moof+mdat) ── */
-      _splitInit(buf) {
+      /* ── Parse fMP4 boxes to separate init (ftyp+moov) from media (moof+mdat) ── */
+      _split(buf) {
         const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
         let pos = 0, end = 0;
         while (pos + 8 <= buf.byteLength) {
@@ -678,26 +688,54 @@
         return { init: buf.slice(0, end), media: buf.slice(end) };
       }
 
-      /* ── Fetch a stream from server and append to SourceBuffer ── */
-      async fetchStream(url, seekPos, mime) {
-        if (this.ctrl) this.ctrl.abort();
-        this.ctrl = new AbortController();
-        this.mimeType = mime;
+      /* ── Chunk arithmetic ── */
+      numChunks()    { return this.duration > 0 ? Math.ceil(this.duration / CHUNK_SECS) : 999; }
+      chunkOf(t)     { return Math.floor(Math.max(0, t) / CHUNK_SECS); }
+      chunkStart(i)  { return i * CHUNK_SECS; }
+      chunkDur(i)    {
+        if (this.duration <= 0) return CHUNK_SECS;
+        return Math.min(CHUNK_SECS, this.duration - i * CHUNK_SECS);
+      }
 
-        await this.ready();
+      /* ── Buffer query ── */
+      isBuffered(t) {
+        if (!this.sb) return false;
+        for (let i = 0; i < this.sb.buffered.length; i++) {
+          if (t >= this.sb.buffered.start(i) + 0.4 && t <= this.sb.buffered.end(i) - 0.4) return true;
+        }
+        return false;
+      }
+
+      /* ── Download + append one chunk ── */
+      async _fetch(chunkIdx, rawPath, mode, audioTrack) {
+        if (this.cached.has(chunkIdx)) return true;
+
+        const ss  = this.chunkStart(chunkIdx);
+        const dur = this.chunkDur(chunkIdx);
+        if (dur <= 0) return true;
+
+        let url = `/api/stream-remux?path=${encodeURIComponent(rawPath)}&ss=${ss}&dur=${dur}&mode=${mode}`;
+        if (audioTrack !== '') url += `&audio_track=${audioTrack}`;
+        console.log(`[MSE] ▶ chunk ${chunkIdx}  ${ss}s–${ss+dur}s`);
+
+        const ctrl = new AbortController();
+        this.activeCtrl = ctrl;
 
         try {
-          const res = await fetch(url, { signal: this.ctrl.signal });
+          const res = await fetch(url, { signal: ctrl.signal });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+          await this._open();
+
           const reader = res.body.getReader();
-          let setupDone = false;
           let carry = new Uint8Array(0);
+          let ready = false;
 
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            // Merge with leftover bytes from previous read
+            /* merge leftover carry bytes */
             let chunk;
             if (carry.byteLength) {
               chunk = new Uint8Array(carry.byteLength + value.byteLength);
@@ -705,104 +743,116 @@
               carry = new Uint8Array(0);
             } else { chunk = value; }
 
-            if (!setupDone) {
-              // Accumulate until we have enough to parse the init segment (~1-4KB)
-              if (chunk.byteLength < 512) { carry = chunk; continue; }
-              setupDone = true;
-              const { init, media } = this._splitInit(chunk);
+            if (!ready) {
+              /* accumulate until we have a parseable init segment */
+              if (chunk.byteLength < 1024) { carry = chunk; continue; }
+              ready = true;
 
-              // Wait for any in-progress append to finish
-              while (this.sb && this.sb.updating) {
+              const { init, media } = this._split(chunk);
+
+              /* wait for any in-progress SourceBuffer operation */
+              while (this.sb && this.sb.updating)
                 await new Promise(r => this.sb.addEventListener('updateend', r, { once: true }));
-              }
 
               if (!this.sb) {
-                // Very first stream — create the SourceBuffer
-                this.sb = this.ms.addSourceBuffer(mime);
+                /* very first chunk — create the SourceBuffer */
+                this.sb = this.ms.addSourceBuffer(MSE_MIME);
                 this.sb.mode = 'segments';
                 this.sb.addEventListener('updateend', () => this._drain());
+                this.initSeg = init;                 // save moov for reuse
               }
 
-              // ── Critical: update appendWindow BEFORE timestampOffset ──
-              // Data outside the window is silently discarded by the browser.
-              // Open the window to accept everything from seekPos onwards.
-              this.sb.appendWindowStart = 0;           // reset first (Chrome requires this order)
+              /* always open the full decode window */
+              this.sb.appendWindowStart = 0;
               this.sb.appendWindowEnd   = Infinity;
+              /* map chunk's 0-based PTS → absolute movie time */
+              this.sb.timestampOffset   = ss;
 
-              // Map FFmpeg's 0-based output timestamps to absolute movie time
-              this.sb.timestampOffset = seekPos;
+              /* append the init segment (chunk 0's moov for all chunks) */
+              await this._enq(this.initSeg);
 
-              // Always append the new init segment to reset the codec context
-              // for this seek position (moov may differ between keyframe groups)
-              this.initSeg = init;
-              await this._enqueue(init);
-
-              // Move the playhead to the target position
-              // (the browser won't play from the right spot otherwise)
-              if (Math.abs(this.video.currentTime - seekPos) > 1) {
-                this.video.currentTime = seekPos;
-              }
-
-              if (media.byteLength > 0) await this._enqueue(media);
+              if (media.byteLength > 0) await this._enq(media);
             } else {
-              await this._enqueue(chunk);
+              await this._enq(chunk);
             }
           }
-        } catch (e) {
-          if (e.name !== 'AbortError') console.error('[StreamEngine]', e.message);
+
+          this.cached.add(chunkIdx);
+          console.log(`[MSE] ✓ chunk ${chunkIdx} cached  buffered=${this._ranges()}`);
+          return true;
+        } catch(e) {
+          if (e.name !== 'AbortError') console.error(`[MSE] ✗ chunk ${chunkIdx}:`, e.message);
+          return false;
         }
       }
 
-      /* ── Buffer queries ── */
-      isBuffered(t) {
-        if (!this.sb || !this.sb.buffered.length) return false;
-        for (let i = 0; i < this.sb.buffered.length; i++) {
-          if (t >= this.sb.buffered.start(i) + 0.3 && t <= this.sb.buffered.end(i) - 0.3) return true;
-        }
-        return false;
+      _ranges() {
+        if (!this.sb) return '—';
+        let s = '';
+        for (let i = 0; i < this.sb.buffered.length; i++)
+          s += `[${this.sb.buffered.start(i).toFixed(1)}–${this.sb.buffered.end(i).toFixed(1)}]`;
+        return s;
       }
 
-      bufferedEnd() {
-        if (!this.sb || !this.sb.buffered.length) return 0;
-        let max = 0;
-        for (let i = 0; i < this.sb.buffered.length; i++) {
-          if (this.sb.buffered.end(i) > max) max = this.sb.buffered.end(i);
-        }
-        return max;
+      /* ── Start playback from startTime, then prefetch ahead ── */
+      async load(rawPath, mode, audioTrack, startTime) {
+        this._abort();
+        const startChunk = this.chunkOf(startTime);
+        const ok = await this._fetch(startChunk, rawPath, mode, audioTrack);
+        if (!ok || this.activeCtrl.signal.aborted) return;
+
+        /* seek to exact position inside the chunk */
+        if (Math.abs(this.video.currentTime - startTime) > 0.5)
+          this.video.currentTime = startTime;
+
+        this._prefetch(startChunk + 1, rawPath, mode, audioTrack);
       }
 
-      /* ── Evict old buffer to cap memory (keep ±120s around current pos) ── */
-      async evict(center) {
-        if (!this.sb || this.sb.updating) return;
-        const lo = Math.max(0, center - 120), hi = center + 120;
-        for (let i = 0; i < this.sb.buffered.length; i++) {
-          const s = this.sb.buffered.start(i), e = this.sb.buffered.end(i);
-          if (e < lo || s > hi) {
-            try {
-              this.sb.remove(s, e);
-              await new Promise(r => this.sb.addEventListener('updateend', r, { once: true }));
-            } catch (_) {}
-          }
-        }
+      /* ── Background prefetch: download sequential chunks ── */
+      _prefetch(from, rawPath, mode, audioTrack) {
+        clearTimeout(this.prefTimer);
+        if (from >= this.numChunks()) return;
+        if (this.duration > 0 && this.chunkStart(from) >= this.duration) return;
+
+        this.prefTimer = setTimeout(async () => {
+          const ctrl = this.activeCtrl;
+          const ok = await this._fetch(from, rawPath, mode, audioTrack);
+          if (!ok || ctrl !== this.activeCtrl) return;   // aborted or superseded
+          this._prefetch(from + 1, rawPath, mode, audioTrack);
+        }, 300);
       }
 
-      /* ── Full reset (used when switching audio track or engine mode) ── */
-      destroy() {
-        if (this.ctrl) this.ctrl.abort();
+      /* ── Smart seek: instant if cached, fetch if not ── */
+      seek(targetTime, rawPath, mode, audioTrack) {
+        if (this.isBuffered(targetTime)) {
+          this.video.currentTime = targetTime;
+          return;
+        }
+        this.load(rawPath, mode, audioTrack, targetTime);
+      }
+
+      /* ── Abort all in-flight downloads ── */
+      _abort() {
+        if (this.activeCtrl) this.activeCtrl.abort();
+        clearTimeout(this.prefTimer);
         this.queue = [];
-        this.busy = false;
-        this.sb = null;
+        this.busy  = false;
+      }
+
+      /* ── Full reset (audio/codec switch) ── */
+      destroy() {
+        this._abort();
+        this.cached.clear();
+        this.sb      = null;
         this.initSeg = null;
-        try {
-          if (this.ms.readyState === 'open') this.ms.endOfStream();
-        } catch (_) {}
+        try { if (this.ms.readyState === 'open') this.ms.endOfStream(); } catch(_) {}
         URL.revokeObjectURL(this.video.src);
-        this._createMS();
+        this._mk();
       }
     }
 
     /* ═══════════════════════════════════════════════════════════════
-       Player UI & State
+       Player state
        ═══════════════════════════════════════════════════════════════ */
     const video   = document.getElementById('cinema-video');
     const slider  = document.getElementById('seek-slider');
@@ -815,115 +865,81 @@
     let duration  = 0;
     let dragging  = false;
     let hideTimer = null;
-    let currentAudioTrack = '';
+    let currentAudioTrack    = '';
     let currentSubtitleTrack = '';
     let lastVolume = 1;
-    let seekDebounce = null;
 
-    // MSE MIME type — H.264 High + AAC-LC (covers most MKV sources in copy mode)
-    const MSE_MIME = 'video/mp4; codecs="avc1.640028,mp4a.40.2"';
-
-    /* ── Anti-zoom / anti-scroll (mobile) ── */
-    document.addEventListener('gesturestart', e => e.preventDefault());
+    /* ── Anti-zoom / anti-scroll ── */
+    document.addEventListener('gesturestart',  e => e.preventDefault());
     document.addEventListener('gesturechange', e => e.preventDefault());
-    document.addEventListener('gestureend', e => e.preventDefault());
+    document.addEventListener('gestureend',    e => e.preventDefault());
     document.addEventListener('touchstart', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
-    let lastTouchEnd = 0;
-    document.addEventListener('touchend', e => { const n = Date.now(); if (n - lastTouchEnd <= 300) e.preventDefault(); lastTouchEnd = n; }, false);
+    let lastTap = 0;
+    document.addEventListener('touchend', e => { const n = Date.now(); if (n - lastTap <= 300) e.preventDefault(); lastTap = n; }, false);
     document.addEventListener('touchmove', e => { if (!e.target.closest('.dropdown-options') && !e.target.closest('input')) e.preventDefault(); }, { passive: false });
 
     /* ── Helpers ── */
     const pad = n => String(Math.floor(n)).padStart(2, '0');
-    function fmt(s) {
-      if (!s || isNaN(s)) return '00:00:00';
-      return `${pad(s/3600)}:${pad((s%3600)/60)}:${pad(s%60)}`;
-    }
+    function fmt(s) { if (!s || isNaN(s)) return '00:00:00'; return `${pad(s/3600)}:${pad((s%3600)/60)}:${pad(s%60)}`; }
 
-    function buildStreamUrl(path, ss, m) {
-      let url = `/api/stream-remux?path=${encodeURIComponent(path)}&ss=${ss}&mode=${m}`;
-      if (currentAudioTrack !== '') url += `&audio_track=${currentAudioTrack}`;
-      return url;
-    }
-
-    /* ── Load stream into MSE SourceBuffer ── */
-    function loadStream(path, ss, m, autoPlay = true) {
+    /* ── Load (or reload) from a position ── */
+    function loadStream(path, ss, m, audioTrack, autoPlay = true) {
       loader.classList.add('visible');
       slider.value = ss;
-      slider.max = duration || ss;
+      slider.max   = duration || ss;
       timeLbl.textContent = `${fmt(ss)} / ${fmt(duration)}`;
 
-      const url = buildStreamUrl(path, ss, m);
-      engine.fetchStream(url, ss, MSE_MIME);
+      engine.load(path, m, audioTrack, ss);
 
       if (autoPlay) {
         const h = () => { video.play().catch(() => {}); video.removeEventListener('canplay', h); };
         video.addEventListener('canplay', h);
       }
 
-      // Load subtitles if active
       const track = document.getElementById('player-subtitle-track');
       if (currentSubtitleTrack !== '') {
-        track.src = `/api/subtitles?path=${encodeURIComponent(rawPath)}&track=${currentSubtitleTrack}`;
+        track.src  = `/api/subtitles?path=${encodeURIComponent(rawPath)}&track=${currentSubtitleTrack}`;
         track.mode = 'showing';
       } else { track.src = ''; track.mode = 'disabled'; }
     }
 
-    /* ── Smart seek — instant if buffered, server fetch if not ── */
-    function smartSeek(targetAbs) {
+    /* ── Smart seek (instant if buffered) ── */
+    function smartSeek(t) {
       if (!rawPath) return;
-      if (targetAbs < 0) targetAbs = 0;
-      if (duration && targetAbs > duration) targetAbs = duration - 1;
-
-      if (engine.isBuffered(targetAbs)) {
-        // Data already in browser cache — instant jump, no network!
-        video.currentTime = targetAbs;
-        slider.value = targetAbs;
-        timeLbl.textContent = `${fmt(targetAbs)} / ${fmt(duration)}`;
-        return;
-      }
-
-      // Outside buffer — fetch from server
-      clearTimeout(seekDebounce);
-      seekDebounce = setTimeout(() => {
-        const wasPlaying = !video.paused;
-        loadStream(rawPath, targetAbs, mode, wasPlaying);
-      }, 150);
+      if (t < 0) t = 0;
+      if (duration && t > duration) t = duration - 1;
+      loader.classList.add('visible');
+      engine.seek(t, rawPath, mode, currentAudioTrack);
     }
 
-    /* ── Event listeners ── */
+    /* ── Video events ── */
     video.addEventListener('waiting', () => loader.classList.add('visible'));
     video.addEventListener('playing', () => loader.classList.remove('visible'));
-
     video.addEventListener('timeupdate', () => {
-      if (dragging) return;
-      if (video.readyState < 3) return;
+      if (dragging || video.readyState < 3) return;
       const t = video.currentTime;
-      const total = duration || t;
-      slider.max = total;
+      slider.max   = duration || t;
       slider.value = t;
       timeLbl.textContent = `${fmt(t)} / ${fmt(duration)}`;
     });
 
-    /* ── Slider interaction ── */
-    function onSliderDrag(v) { dragging = true; timeLbl.textContent = `${fmt(v)} / ${fmt(duration)}`; }
-    function onSliderSeek(v) { dragging = false; smartSeek(parseFloat(v)); }
-
+    /* ── Controls ── */
+    function onSliderDrag(v)  { dragging = true;  timeLbl.textContent = `${fmt(v)} / ${fmt(duration)}`; }
+    function onSliderSeek(v)  { dragging = false; smartSeek(parseFloat(v)); }
     function seekSkip(offset) {
-      let target = video.currentTime + offset;
-      if (target < 0) target = 0;
-      if (duration && target > duration) target = duration - 1;
+      let t = video.currentTime + offset;
+      if (t < 0) t = 0;
+      if (duration && t > duration) t = duration - 1;
       flashHudIcon(offset > 0 ? 'forward' : 'rewind');
-      smartSeek(target);
+      smartSeek(t);
     }
 
-    /* ── Play / Pause ── */
     function togglePlay() {
       if (video.paused) { video.play().catch(() => {}); flashHudIcon('play'); }
-      else { video.pause(); flashHudIcon('pause'); }
-      updatePlayBtnUI();
+      else              { video.pause();                flashHudIcon('pause'); }
+      updatePlayBtn();
     }
-
-    function updatePlayBtnUI() {
+    function updatePlayBtn() {
       const btn = document.getElementById('play-btn');
       if (video.paused) {
         btn.classList.add('paused-state');
@@ -933,58 +949,44 @@
         btn.innerHTML = `<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 19h4c.55 0 1-.45 1-1V6c0-.55-.45-1-1-1H6c-.55 0-1 .45-1 1v12c0 .55.45 1 1 1zm8-13v12c0 .55.45 1 1 1h4c.55 0 1-.45 1-1V6c0-.55-.45-1-1-1h-4c-.55 0-1 .45-1 1z"/></svg>`;
       }
     }
-    video.addEventListener('play', updatePlayBtnUI);
-    video.addEventListener('pause', updatePlayBtnUI);
+    video.addEventListener('play',  updatePlayBtn);
+    video.addEventListener('pause', updatePlayBtn);
 
-    /* ── HUD Pulse Animation ── */
     function flashHudIcon(type) {
-      const wrap = document.getElementById('hud-icon-wrap');
-      wrap.classList.remove('animate');
-      void wrap.offsetWidth;
-      const svgs = {
-        play:    '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>',
-        pause:   '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>',
-        forward: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 18l8.5-6L4 6v12zm8.5 0l8.5-6-8.5-6v12z"/></svg>',
-        rewind:  '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12.5 12V6l-8.5 6 8.5 6v-6zm.5-6v12l8.5-6L13 6z"/></svg>',
-      };
-      wrap.innerHTML = svgs[type] || '';
-      wrap.classList.add('animate');
+      const w = document.getElementById('hud-icon-wrap');
+      w.classList.remove('animate'); void w.offsetWidth;
+      const m = { play:'<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>', pause:'<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>', forward:'<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 18l8.5-6L4 6v12zm8.5 0l8.5-6-8.5-6v12z"/></svg>', rewind:'<svg viewBox="0 0 24 24"><path fill="currentColor" d="M12.5 12V6l-8.5 6 8.5 6v-6zm.5-6v12l8.5-6L13 6z"/></svg>' };
+      w.innerHTML = m[type] || '';
+      w.classList.add('animate');
     }
 
     /* ── Volume ── */
-    function onVolumeChange(val) { video.volume = val; if (val > 0) lastVolume = val; updateVolumeIcon(val); }
+    function onVolumeChange(val) { video.volume = val; if (val > 0) lastVolume = val; updateVolIcon(val); }
     function toggleMute() {
       if (video.volume > 0) { onVolumeChange(0); document.getElementById('volume-slider').value = 0; }
       else { onVolumeChange(lastVolume); document.getElementById('volume-slider').value = lastVolume; }
     }
-    function updateVolumeIcon(val) {
-      const icon = document.getElementById('volume-icon');
-      if (val == 0) icon.innerHTML = `<path fill="currentColor" d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.21.05-.42.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73 4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>`;
-      else if (val < 0.5) icon.innerHTML = `<path fill="currentColor" d="M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/>`;
-      else icon.innerHTML = `<path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>`;
+    function updateVolIcon(val) {
+      const ic = document.getElementById('volume-icon');
+      if (val == 0)       ic.innerHTML = `<path fill="currentColor" d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.21.05-.42.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73 4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>`;
+      else if (val < 0.5) ic.innerHTML = `<path fill="currentColor" d="M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/>`;
+      else                ic.innerHTML = `<path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>`;
     }
 
-    /* ── Dropdown menus ── */
+    /* ── Dropdowns ── */
     function toggleDropdown(id) {
-      const m = document.getElementById(id);
-      const open = m.classList.contains('active');
-      closeAllDropdowns();
-      if (!open) m.classList.add('active');
+      const m = document.getElementById(id), open = m.classList.contains('active');
+      closeAllDropdowns(); if (!open) m.classList.add('active');
     }
     function closeAllDropdowns() { document.querySelectorAll('.dropdown-menu').forEach(m => m.classList.remove('active')); }
     document.addEventListener('click', e => { if (!e.target.closest('.selector-container')) closeAllDropdowns(); });
 
-    /* ── Engine mode toggle ── */
+    /* ── Engine mode ── */
     function togglePlaybackMode() {
       mode = mode === 'direct' ? 'compat' : 'direct';
       document.getElementById('engine-badge').textContent = mode === 'compat' ? '🛡️ Compatible' : '🚀 Direct';
-      const btn = document.getElementById('mode-toggle-btn');
-      btn.classList.toggle('active-cc', mode === 'compat');
-      if (rawPath) {
-        const pos = video.currentTime || 0;
-        engine.destroy(); // Full reset — codec may change
-        loadStream(rawPath, pos, mode, true);
-      }
+      document.getElementById('mode-toggle-btn').classList.toggle('active-cc', mode === 'compat');
+      if (rawPath) { const t = video.currentTime; engine.destroy(); engine.duration = duration; loadStream(rawPath, t, mode, currentAudioTrack); }
     }
 
     /* ── Track management ── */
@@ -993,61 +995,59 @@
         .then(r => r.json())
         .then(d => {
           duration = d.duration || 0;
+          engine.duration = duration;
           slider.max = duration;
           timeLbl.textContent = `00:00:00 / ${fmt(duration)}`;
-          setupAudioTrackDropdown(d.audio_tracks || []);
+          setupAudioDropdown(d.audio_tracks || []);
           setupSubtitleDropdown(d.subtitle_tracks || []);
-        })
-        .catch(() => { duration = 0; });
+        }).catch(() => { duration = 0; });
     }
 
-    function setupAudioTrackDropdown(tracks) {
+    function setupAudioDropdown(tracks) {
       const list = document.getElementById('audio-options-list');
-      const ctr = document.getElementById('audio-container');
+      const ctr  = document.getElementById('audio-container');
       list.innerHTML = '';
       if (tracks.length <= 1) { ctr.style.display = 'none'; return; }
       ctr.style.display = 'block';
-      const mkOpt = (label, idx) => {
+      const mk = (label, idx) => {
         const el = document.createElement('div');
         el.className = 'dropdown-option' + (String(currentAudioTrack) === String(idx) ? ' selected' : '');
         el.textContent = label;
-        el.onclick = () => { currentAudioTrack = idx; closeAllDropdowns(); reloadForTrackChange(); };
+        el.onclick = () => { currentAudioTrack = idx; closeAllDropdowns(); reloadTrack(); };
         list.appendChild(el);
       };
-      mkOpt('Default Track', '');
-      tracks.forEach(t => mkOpt(t.title, t.index));
+      mk('Default Track', ''); tracks.forEach(t => mk(t.title, t.index));
     }
 
-    function reloadForTrackChange() {
+    function reloadTrack() {
       if (!rawPath) return;
-      const pos = video.currentTime || 0;
-      engine.destroy(); // Audio stream changed — full reset
-      loadStream(rawPath, pos, mode, true);
+      const t = video.currentTime;
+      engine.destroy(); engine.duration = duration;
+      loadStream(rawPath, t, mode, currentAudioTrack);
       fetchMediaMetadata(rawPath);
     }
 
     function setupSubtitleDropdown(tracks) {
       const list = document.getElementById('subtitle-options-list');
-      const ctr = document.getElementById('subtitle-container');
+      const ctr  = document.getElementById('subtitle-container');
       list.innerHTML = '';
       if (tracks.length === 0) { ctr.style.display = 'none'; return; }
       ctr.style.display = 'block';
-      const mkOpt = (label, idx) => {
+      const mk = (label, idx) => {
         const el = document.createElement('div');
         el.className = 'dropdown-option' + (String(currentSubtitleTrack) === String(idx) ? ' selected' : '');
         el.textContent = label;
-        el.onclick = () => { currentSubtitleTrack = idx; closeAllDropdowns(); applySubtitleTrack(); };
+        el.onclick = () => { currentSubtitleTrack = idx; closeAllDropdowns(); applySubtitle(); };
         list.appendChild(el);
       };
-      mkOpt('Off', '');
-      tracks.forEach(t => mkOpt(t.title, t.index));
+      mk('Off', ''); tracks.forEach(t => mk(t.title, t.index));
     }
 
-    function applySubtitleTrack() {
-      const track = document.getElementById('player-subtitle-track');
-      const ccBtn = document.getElementById('cc-btn');
-      if (currentSubtitleTrack === '') { track.src = ''; track.mode = 'disabled'; ccBtn.classList.remove('active-cc'); }
-      else { track.src = `/api/subtitles?path=${encodeURIComponent(rawPath)}&track=${currentSubtitleTrack}`; track.mode = 'showing'; ccBtn.classList.add('active-cc'); }
+    function applySubtitle() {
+      const tr = document.getElementById('player-subtitle-track');
+      const cc = document.getElementById('cc-btn');
+      if (currentSubtitleTrack === '') { tr.src = ''; tr.mode = 'disabled'; cc.classList.remove('active-cc'); }
+      else { tr.src = `/api/subtitles?path=${encodeURIComponent(rawPath)}&track=${currentSubtitleTrack}`; tr.mode = 'showing'; cc.classList.add('active-cc'); }
       fetchMediaMetadata(rawPath);
     }
 
@@ -1061,47 +1061,43 @@
     /* ── Controls auto-hide ── */
     function showControls() {
       const o = document.getElementById('controls-overlay');
-      o.classList.remove('hidden');
-      document.body.style.cursor = 'default';
+      o.classList.remove('hidden'); document.body.style.cursor = 'default';
       clearTimeout(hideTimer);
       hideTimer = setTimeout(() => {
         if (!video.paused && !dragging && !document.querySelector('.dropdown-menu.active')) {
-          o.classList.add('hidden');
-          document.body.style.cursor = 'none';
+          o.classList.add('hidden'); document.body.style.cursor = 'none';
         }
       }, 3500);
     }
-    document.addEventListener('mousemove', showControls);
-    document.addEventListener('click', showControls);
+    document.addEventListener('mousemove',  showControls);
+    document.addEventListener('click',      showControls);
     document.addEventListener('touchstart', showControls);
 
     /* ── Keyboard shortcuts ── */
     document.addEventListener('keydown', e => {
-      switch (e.key) {
-        case ' ': e.preventDefault(); togglePlay(); break;
-        case 'ArrowLeft': e.preventDefault(); seekSkip(-5); break;
-        case 'ArrowRight': e.preventDefault(); seekSkip(5); break;
-        case 'f': e.preventDefault(); toggleFullscreen(); break;
+      switch(e.key) {
+        case ' ':          e.preventDefault(); togglePlay();         break;
+        case 'ArrowLeft':  e.preventDefault(); seekSkip(-5);         break;
+        case 'ArrowRight': e.preventDefault(); seekSkip(5);          break;
+        case 'f':          e.preventDefault(); toggleFullscreen();   break;
       }
     });
 
     /* ── Boot ── */
     window.addEventListener('DOMContentLoaded', () => {
-      const params = new URLSearchParams(window.location.search);
-      const urlParam = params.get('url');
-      const nameParam = params.get('name');
+      const p = new URLSearchParams(window.location.search);
+      let urlParam  = p.get('url')  || '';
+      let nameParam = p.get('name') || 'Cinema Stream';
+
+      const dec = s => { try { while (s.includes('%')) { const n = decodeURIComponent(s); if (n === s) break; s = n; } } catch(_) {} return s; };
+      urlParam  = dec(urlParam);
+      nameParam = dec(nameParam);
 
       if (urlParam) {
-        let decoded = urlParam;
-        try { while (decoded.includes('%')) { const n = decodeURIComponent(decoded); if (n === decoded) break; decoded = n; } } catch (_) {}
-        rawPath = decoded;
-
-        let decodedName = nameParam || 'Cinema Stream';
-        try { while (decodedName.includes('%')) { const n = decodeURIComponent(decodedName); if (n === decodedName) break; decodedName = n; } } catch (_) {}
-
-        document.getElementById('active-title').textContent = `🎬 ${decodedName}`;
-        fetchMediaMetadata(rawPath);
-        loadStream(rawPath, 0, mode, true);
+        rawPath = urlParam;
+        document.getElementById('active-title').textContent = `🎬 ${nameParam}`;
+        fetchMediaMetadata(rawPath);         // get duration + tracks
+        loadStream(rawPath, 0, mode, currentAudioTrack, true);
         showControls();
       } else {
         document.getElementById('active-title').textContent = '⚠️ No stream URL provided';
@@ -1109,7 +1105,8 @@
       }
     });
   </script>
-
+    /* ═══════════════════════════════════════════════════════════════
+       MSE-Based Streaming Engine — caches chunks in-browser like
+       Netflix/YouTube. Seeking within buffered data is instant.
 </body>
 </html>
-
