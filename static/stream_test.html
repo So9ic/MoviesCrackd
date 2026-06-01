@@ -745,7 +745,7 @@
 
     function onSliderSeek(v) {
       dragging = false;
-      doSeek(parseFloat(v));
+      smartSeek(parseFloat(v));
     }
 
     function seekSkip(offset) {
@@ -756,18 +756,48 @@
       
       // HUD skip flash animation
       flashHudIcon(offset > 0 ? 'forward' : 'rewind');
-      doSeek(target);
+      smartSeek(target);
     }
 
-    let seekDebounce = null;
-    function doSeek(seconds) {
+    /* ── Smart Seek: use buffer when possible, reload only when necessary ── */
+    
+    // Check if a given video-element-relative time is already buffered
+    function isTimeBuffered(videoTime) {
+      for (let i = 0; i < video.buffered.length; i++) {
+        // Allow a small margin (0.5s) to avoid edge-case misses
+        if (videoTime >= video.buffered.start(i) && videoTime <= video.buffered.end(i) - 0.5) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function smartSeek(targetAbsolute) {
       if (!rawPath) return;
+      
+      // Convert absolute movie time → video element's local time
+      const targetVideoTime = targetAbsolute - seekBase;
+      
+      // If the target is within the already-downloaded buffer, just jump — zero network cost
+      if (targetVideoTime >= 0 && isTimeBuffered(targetVideoTime)) {
+        video.currentTime = targetVideoTime;
+        // Update UI immediately
+        const total = duration || targetAbsolute;
+        slider.max   = total;
+        slider.value = targetAbsolute;
+        timeLbl.textContent = `${fmt(targetAbsolute)} / ${fmt(duration)}`;
+        return;
+      }
+      
+      // Target is outside the buffer — need to reload stream from server
       clearTimeout(seekDebounce);
       seekDebounce = setTimeout(() => {
         const wasPlaying = !video.paused;
-        loadStream(rawPath, seconds, mode, wasPlaying);
+        loadStream(rawPath, targetAbsolute, mode, wasPlaying);
       }, 150);
     }
+
+    let seekDebounce = null;
 
     /* ── Play / Pause ── */
     function togglePlay() {
