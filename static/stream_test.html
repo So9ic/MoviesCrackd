@@ -637,8 +637,9 @@
         this.busy       = false;
         this.cached     = new Set();   // chunk indices fully appended
         this.activeCtrl = null;
-        this.prefTimer  = null;
-        this.duration   = 0;
+        this.prefTimer    = null;
+        this.prefGen      = 0;    // incremented on each load() to invalidate stale prefetch chains
+        this.duration     = 0;
         this._mk();
       }
 
@@ -779,9 +780,11 @@
 
           this.cached.add(chunkIdx);
           console.log(`[MSE] ✓ chunk ${chunkIdx} cached  buffered=${this._ranges()}`);
+          this.activeCtrl = null;   // mark as idle so checkPrefetch can trigger if needed
           return true;
         } catch(e) {
           if (e.name !== 'AbortError') console.error(`[MSE] ✗ chunk ${chunkIdx}:`, e.message);
+          this.activeCtrl = null;
           return false;
         }
       }
@@ -797,29 +800,44 @@
       /* ── Start playback from startTime, then prefetch ahead ── */
       async load(rawPath, mode, audioTrack, startTime) {
         this._abort();
+        const gen = ++this.prefGen;   // new generation — invalidates any stale prefetch
         const startChunk = this.chunkOf(startTime);
         const ok = await this._fetch(startChunk, rawPath, mode, audioTrack);
-        if (!ok || this.activeCtrl.signal.aborted) return;
+        if (!ok || gen !== this.prefGen) return;   // aborted or a newer load() started
 
         /* seek to exact position inside the chunk */
         if (Math.abs(this.video.currentTime - startTime) > 0.5)
           this.video.currentTime = startTime;
 
-        this._prefetch(startChunk + 1, rawPath, mode, audioTrack);
+        this._prefetch(startChunk + 1, rawPath, mode, audioTrack, gen);
       }
 
       /* ── Background prefetch: download sequential chunks ── */
-      _prefetch(from, rawPath, mode, audioTrack) {
+      _prefetch(from, rawPath, mode, audioTrack, gen) {
         clearTimeout(this.prefTimer);
         if (from >= this.numChunks()) return;
         if (this.duration > 0 && this.chunkStart(from) >= this.duration) return;
 
         this.prefTimer = setTimeout(async () => {
-          const ctrl = this.activeCtrl;
+          if (gen !== this.prefGen) return;   // a seek/load() happened — stop this chain
           const ok = await this._fetch(from, rawPath, mode, audioTrack);
-          if (!ok || ctrl !== this.activeCtrl) return;   // aborted or superseded
-          this._prefetch(from + 1, rawPath, mode, audioTrack);
-        }, 300);
+          if (!ok || gen !== this.prefGen) return;   // aborted or superseded
+          this._prefetch(from + 1, rawPath, mode, audioTrack, gen);  // continue chain
+        }, 200);
+      }
+
+      /* ── Safety-net: trigger prefetch if we're within 20s of buffer end ── */
+      checkPrefetch(currentTime, rawPath, mode, audioTrack) {
+        if (!this.sb || !this.sb.buffered.length) return;
+        const bufEnd = this.bufferedEnd();
+        // Only trigger if close to end AND no active download
+        if (bufEnd > 0 && currentTime >= bufEnd - 20 && !this.activeCtrl) {
+          const nextChunk = this.chunkOf(bufEnd) + 1;
+          if (nextChunk < this.numChunks() && !this.cached.has(nextChunk)) {
+            console.log(`[MSE] safety-net kick: prefetch chunk ${nextChunk}`);
+            this._prefetch(nextChunk, rawPath, mode, audioTrack, this.prefGen);
+          }
+        }
       }
 
       /* ── Smart seek: instant if cached, fetch if not ── */
@@ -921,6 +939,8 @@
       slider.max   = duration || t;
       slider.value = t;
       timeLbl.textContent = `${fmt(t)} / ${fmt(duration)}`;
+      // Safety net: kick prefetch if we're near the buffer edge
+      engine.checkPrefetch(t, rawPath, mode, currentAudioTrack);
     });
 
     /* ── Controls ── */
