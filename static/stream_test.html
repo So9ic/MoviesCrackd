@@ -882,6 +882,7 @@
     const slider  = document.getElementById('seek-slider');
     const timeLbl = document.getElementById('time-display');
     const loader  = document.getElementById('loading-overlay');
+    const supportsAudioTracks = 'audioTracks' in video;
 
     let engine    = new StreamEngine(video);
     let rawPath   = '';
@@ -889,7 +890,11 @@
     let duration  = 0;
     let dragging  = false;
     let hideTimer = null;
-    let currentAudioTrack    = '';
+    let currentAudioTrackIdx = 0;
+    let currentAudioTrackStream = '';
+    let multiAudioMode = false;
+    let disableMultiAudio = false;
+    let audioTrackMap = [];
     let currentSubtitleTrack = '';
     let lastVolume = 1;
 
@@ -907,13 +912,14 @@
     function fmt(s) { if (!s || isNaN(s)) return '00:00:00'; return `${pad(s/3600)}:${pad((s%3600)/60)}:${pad(s%60)}`; }
 
     /* ── Load (or reload) from a position ── */
-    function loadStream(path, ss, m, audioTrack, autoPlay = true) {
+    function loadStream(path, ss, m, autoPlay = true) {
       loader.classList.add('visible');
       slider.value = ss;
       slider.max   = duration || ss;
       timeLbl.textContent = `${fmt(ss)} / ${fmt(duration)}`;
 
-      engine.load(path, m, audioTrack, ss);
+      const streamAudioParam = getStreamAudioParam();
+      engine.load(path, m, streamAudioParam, ss);
 
       if (autoPlay) {
         const h = () => { video.play().catch(() => {}); video.removeEventListener('canplay', h); };
@@ -933,7 +939,7 @@
       if (t < 0) t = 0;
       if (duration && t > duration) t = duration - 1;
       loader.classList.add('visible');
-      engine.seek(t, rawPath, mode, currentAudioTrack);
+      engine.seek(t, rawPath, mode, getStreamAudioParam());
     }
 
     /* ── Video events ── */
@@ -946,7 +952,7 @@
       slider.value = t;
       timeLbl.textContent = `${fmt(t)} / ${fmt(duration)}`;
       // Safety net: kick prefetch if we're near the buffer edge
-      engine.checkPrefetch(t, rawPath, mode, currentAudioTrack);
+      engine.checkPrefetch(t, rawPath, mode, getStreamAudioParam());
     });
 
     /* ── Controls ── */
@@ -1012,7 +1018,7 @@
       mode = mode === 'direct' ? 'compat' : 'direct';
       document.getElementById('engine-badge').textContent = mode === 'compat' ? '🛡️ Compatible' : '🚀 Direct';
       document.getElementById('mode-toggle-btn').classList.toggle('active-cc', mode === 'compat');
-      if (rawPath) { const t = video.currentTime; engine.destroy(); engine.duration = duration; loadStream(rawPath, t, mode, currentAudioTrack); }
+      if (rawPath) { const t = video.currentTime; engine.destroy(); engine.duration = duration; loadStream(rawPath, t, mode); }
     }
 
     /* ── Track management ── */
@@ -1024,7 +1030,16 @@
           engine.duration = duration;
           slider.max = duration;
           timeLbl.textContent = `00:00:00 / ${fmt(duration)}`;
+          const prevMulti = multiAudioMode;
           setupAudioDropdown(d.audio_tracks || []);
+          if (multiAudioMode && !prevMulti && rawPath) {
+            const t = video.currentTime || 0;
+            engine.destroy();
+            engine.duration = duration;
+            loadStream(rawPath, t, mode);
+          } else if (multiAudioMode) {
+            scheduleAudioTrackApply();
+          }
           setupSubtitleDropdown(d.subtitle_tracks || []);
         }).catch(() => { duration = 0; });
     }
@@ -1033,23 +1048,92 @@
       const list = document.getElementById('audio-options-list');
       const ctr  = document.getElementById('audio-container');
       list.innerHTML = '';
-      if (tracks.length <= 1) { ctr.style.display = 'none'; return; }
+      if (tracks.length <= 1) {
+        ctr.style.display = 'none';
+        multiAudioMode = false;
+        audioTrackMap = [];
+        currentAudioTrackIdx = 0;
+        currentAudioTrackStream = '';
+        return;
+      }
+
       ctr.style.display = 'block';
-      const mk = (label, idx) => {
+      multiAudioMode = supportsAudioTracks && !disableMultiAudio;
+      audioTrackMap = tracks.map(t => t.index);
+      currentAudioTrackIdx = 0;
+      currentAudioTrackStream = audioTrackMap[0] ?? '';
+
+      const mk = (label, uiIdx, streamIdx) => {
         const el = document.createElement('div');
-        el.className = 'dropdown-option' + (String(currentAudioTrack) === String(idx) ? ' selected' : '');
+        const isSelected = uiIdx === currentAudioTrackIdx;
+        el.className = 'dropdown-option' + (isSelected ? ' selected' : '');
         el.textContent = label;
-        el.onclick = () => { currentAudioTrack = idx; closeAllDropdowns(); reloadTrack(); };
+        el.onclick = () => {
+          currentAudioTrackIdx = uiIdx;
+          currentAudioTrackStream = streamIdx;
+          closeAllDropdowns();
+          updateAudioSelectionUI();
+          applyAudioTrackSelection();
+        };
         list.appendChild(el);
       };
-      mk('Default Track', ''); tracks.forEach(t => mk(t.title, t.index));
+
+      if (!multiAudioMode) {
+        mk('Default Track', 0, audioTrackMap[0] ?? '');
+        tracks.forEach((t, idx) => mk(t.title, idx + 1, t.index));
+      } else {
+        tracks.forEach((t, idx) => mk(t.title, idx, t.index));
+      }
+    }
+
+    function getStreamAudioParam() {
+      if (multiAudioMode) return 'all';
+      return currentAudioTrackStream !== '' ? currentAudioTrackStream : '';
+    }
+
+    function updateAudioSelectionUI() {
+      const options = document.querySelectorAll('#audio-options-list .dropdown-option');
+      options.forEach((opt, idx) => {
+        opt.classList.toggle('selected', idx === currentAudioTrackIdx);
+      });
+    }
+
+    function applyAudioTrackSelection() {
+      if (!multiAudioMode) {
+        reloadTrack();
+        return;
+      }
+      if (!video.audioTracks || !video.audioTracks.length) {
+        scheduleAudioTrackApply();
+        return;
+      }
+      const target = Math.min(currentAudioTrackIdx, video.audioTracks.length - 1);
+      for (let i = 0; i < video.audioTracks.length; i++) {
+        video.audioTracks[i].enabled = i === target;
+      }
+    }
+
+    function scheduleAudioTrackApply(retry = 0) {
+      if (!multiAudioMode) return;
+      if (video.audioTracks && video.audioTracks.length) {
+        applyAudioTrackSelection();
+        return;
+      }
+      if (retry >= 5) {
+        console.warn('[MSE] Audio tracks not exposed; falling back to server-side track switching.');
+        disableMultiAudio = true;
+        multiAudioMode = false;
+        reloadTrack();
+        return;
+      }
+      setTimeout(() => scheduleAudioTrackApply(retry + 1), 400);
     }
 
     function reloadTrack() {
       if (!rawPath) return;
       const t = video.currentTime;
       engine.destroy(); engine.duration = duration;
-      loadStream(rawPath, t, mode, currentAudioTrack);
+      loadStream(rawPath, t, mode);
       fetchMediaMetadata(rawPath);
     }
 
@@ -1074,7 +1158,6 @@
       const cc = document.getElementById('cc-btn');
       if (currentSubtitleTrack === '') { tr.src = ''; tr.mode = 'disabled'; cc.classList.remove('active-cc'); }
       else { tr.src = `/api/subtitles?path=${encodeURIComponent(rawPath)}&track=${currentSubtitleTrack}`; tr.mode = 'showing'; cc.classList.add('active-cc'); }
-      fetchMediaMetadata(rawPath);
     }
 
     /* ── Fullscreen ── */
@@ -1123,7 +1206,7 @@
         rawPath = urlParam;
         document.getElementById('active-title').textContent = `🎬 ${nameParam}`;
         fetchMediaMetadata(rawPath);         // get duration + tracks
-        loadStream(rawPath, 0, mode, currentAudioTrack, true);
+        loadStream(rawPath, 0, mode, true);
         showControls();
       } else {
         document.getElementById('active-title').textContent = '⚠️ No stream URL provided';

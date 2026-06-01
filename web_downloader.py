@@ -3139,10 +3139,26 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             if mode == 'compat':
                 # Transcode: needed for HEVC/VP9 sources that browsers can't decode natively
                 video_opts = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '26', '-tune', 'zerolatency']
-                audio_opts = ['-c:a', 'aac', '-b:a', '128k', '-ac', '2']
             else:
                 # Direct copy: zero CPU usage, instant start — works for H.264+AAC sources
                 video_opts = ['-c:v', 'copy']
+
+            # Select audio track(s) to map
+            audio_track = (audio_track or '').strip().lower() if audio_track is not None else ''
+            if audio_track == 'all':
+                audio_map = '0:a?'
+                force_audio_aac = True
+            elif audio_track.isdigit():
+                audio_map = f"0:{audio_track}"
+                force_audio_aac = False
+            else:
+                audio_map = '0:a:0'
+                force_audio_aac = False
+
+            # Audio codec: force AAC when streaming all tracks so MSE can switch instantly
+            if mode == 'compat' or force_audio_aac:
+                audio_opts = ['-c:a', 'aac', '-b:a', '128k', '-ac', '2']
+            else:
                 audio_opts = ['-c:a', 'copy']
 
             # Configure input options for remote streams
@@ -3157,12 +3173,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     '-reconnect_delay_max', '5',
                     '-timeout', '10000000',    # 10 second connection timeout in microseconds
                 ]
-
-            # Select audio track to map
-            if audio_track and audio_track.isdigit():
-                audio_map = f"0:{audio_track}"
-            else:
-                audio_map = "0:a:0"
 
             # Input-level seeking (-ss BEFORE -i) for both local and remote:
             # - Fast: FFmpeg uses the container index (MKV cues / MP4 moov) to jump directly
