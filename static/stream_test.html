@@ -707,6 +707,11 @@
         return false;
       }
 
+      bufferedEnd() {
+        if (!this.sb || !this.sb.buffered.length) return 0;
+        return this.sb.buffered.end(this.sb.buffered.length - 1);
+      }
+
       /* ── Download + append one chunk ── */
       async _fetch(chunkIdx, rawPath, mode, audioTrack) {
         if (this.cached.has(chunkIdx)) return true;
