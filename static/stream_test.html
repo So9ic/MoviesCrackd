@@ -620,11 +620,11 @@
        - Downloads current chunk, prefetches next one ahead
        - Instant seek if chunk already cached, else fetch that chunk
        - Each chunk: stripped init (reuse chunk-0 moov), media appended
-         with timestampOffset = chunkStart so PTS maps to real movie time
+         with timestampOffset = start time so PTS maps to real movie time
        ═══════════════════════════════════════════════════════════════ */
 
     const CHUNK_SECS   = 60;   // seconds per chunk (1 minute)
-    const PREFETCH_NUM = 2;    // how many chunks to keep ahead of playback
+    const PREFETCH_NUM = 1;    // keep only the next chunk prefetched
     const MSE_MIME     = 'video/mp4; codecs="avc1.640028,mp4a.40.2"';
 
     class StreamEngine {
@@ -640,6 +640,7 @@
         this.prefTimer    = null;
         this.prefGen      = 0;    // incremented on each load() to invalidate stale prefetch chains
         this.duration     = 0;
+        this.nextStart    = 0;
         this._mk();
       }
 
@@ -690,12 +691,9 @@
       }
 
       /* ── Chunk arithmetic ── */
-      numChunks()    { return this.duration > 0 ? Math.ceil(this.duration / CHUNK_SECS) : 999; }
-      chunkOf(t)     { return Math.floor(Math.max(0, t) / CHUNK_SECS); }
-      chunkStart(i)  { return i * CHUNK_SECS; }
-      chunkDur(i)    {
+      chunkDurByStart(t) {
         if (this.duration <= 0) return CHUNK_SECS;
-        return Math.min(CHUNK_SECS, this.duration - i * CHUNK_SECS);
+        return Math.max(0, Math.min(CHUNK_SECS, this.duration - t));
       }
 
       /* ── Buffer query ── */
@@ -713,16 +711,17 @@
       }
 
       /* ── Download + append one chunk ── */
-      async _fetch(chunkIdx, rawPath, mode, audioTrack) {
-        if (this.cached.has(chunkIdx)) return true;
+      async _fetch(startTime, rawPath, mode, audioTrack) {
+        const ss = Math.max(0, Number(startTime) || 0);
+        const key = ss.toFixed(2);
+        if (this.cached.has(key)) return true;
 
-        const ss  = this.chunkStart(chunkIdx);
-        const dur = this.chunkDur(chunkIdx);
+        const dur = this.chunkDurByStart(ss);
         if (dur <= 0) return true;
 
         let url = `/api/stream-remux?path=${encodeURIComponent(rawPath)}&ss=${ss}&dur=${dur}&mode=${mode}`;
         if (audioTrack !== '') url += `&audio_track=${audioTrack}`;
-        console.log(`[MSE] ▶ chunk ${chunkIdx}  ${ss}s–${ss+dur}s`);
+        console.log(`[MSE] ▶ chunk @${ss.toFixed(2)}s  ${ss.toFixed(2)}s–${(ss + dur).toFixed(2)}s`);
 
         const ctrl = new AbortController();
         this.activeCtrl = ctrl;
@@ -783,12 +782,13 @@
             }
           }
 
-          this.cached.add(chunkIdx);
-          console.log(`[MSE] ✓ chunk ${chunkIdx} cached  buffered=${this._ranges()}`);
+          this.cached.add(key);
+          this.nextStart = Math.max(this.nextStart, this.bufferedEnd());
+          console.log(`[MSE] ✓ chunk @${ss.toFixed(2)}s cached  buffered=${this._ranges()}`);
           this.activeCtrl = null;   // mark as idle so checkPrefetch can trigger if needed
           return true;
         } catch(e) {
-          if (e.name !== 'AbortError') console.error(`[MSE] ✗ chunk ${chunkIdx}:`, e.message);
+          if (e.name !== 'AbortError') console.error(`[MSE] ✗ chunk @${ss.toFixed(2)}s:`, e.message);
           this.activeCtrl = null;
           return false;
         }
@@ -806,28 +806,32 @@
       async load(rawPath, mode, audioTrack, startTime) {
         this._abort();
         const gen = ++this.prefGen;   // new generation — invalidates any stale prefetch
-        const startChunk = this.chunkOf(startTime);
-        const ok = await this._fetch(startChunk, rawPath, mode, audioTrack);
+        this.nextStart = Math.max(0, Number(startTime) || 0);
+        const ok = await this._fetch(this.nextStart, rawPath, mode, audioTrack);
         if (!ok || gen !== this.prefGen) return;   // aborted or a newer load() started
 
         /* seek to exact position inside the chunk */
         if (Math.abs(this.video.currentTime - startTime) > 0.5)
           this.video.currentTime = startTime;
 
-        this._prefetch(startChunk + 1, rawPath, mode, audioTrack, gen);
+        this._prefetch(this.nextStart, rawPath, mode, audioTrack, gen);
       }
 
       /* ── Background prefetch: download sequential chunks ── */
       _prefetch(from, rawPath, mode, audioTrack, gen) {
         clearTimeout(this.prefTimer);
-        if (from >= this.numChunks()) return;
-        if (this.duration > 0 && this.chunkStart(from) >= this.duration) return;
+        const startAt = Math.max(0, Number(from) || 0);
+        if (this.duration > 0 && startAt >= this.duration) return;
 
         this.prefTimer = setTimeout(async () => {
           if (gen !== this.prefGen) return;   // a seek/load() happened — stop this chain
-          const ok = await this._fetch(from, rawPath, mode, audioTrack);
-          if (!ok || gen !== this.prefGen) return;   // aborted or superseded
-          this._prefetch(from + 1, rawPath, mode, audioTrack, gen);  // continue chain
+          let nextStart = startAt;
+          for (let i = 0; i < PREFETCH_NUM; i++) {
+            const ok = await this._fetch(nextStart, rawPath, mode, audioTrack);
+            if (!ok || gen !== this.prefGen) return;   // aborted or superseded
+            nextStart = this.nextStart;
+            if (this.duration > 0 && nextStart >= this.duration) break;
+          }
         }, 200);
       }
 
@@ -837,11 +841,8 @@
         const bufEnd = this.bufferedEnd();
         // Only trigger if close to end AND no active download
         if (bufEnd > 0 && currentTime >= bufEnd - 20 && !this.activeCtrl) {
-          const nextChunk = this.chunkOf(bufEnd) + 1;
-          if (nextChunk < this.numChunks() && !this.cached.has(nextChunk)) {
-            console.log(`[MSE] safety-net kick: prefetch chunk ${nextChunk}`);
-            this._prefetch(nextChunk, rawPath, mode, audioTrack, this.prefGen);
-          }
+          console.log(`[MSE] safety-net kick: prefetch @${bufEnd.toFixed(2)}s`);
+          this._prefetch(bufEnd, rawPath, mode, audioTrack, this.prefGen);
         }
       }
 
