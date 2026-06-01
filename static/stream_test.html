@@ -884,8 +884,6 @@
       slider.max = total;
       slider.value = t;
       timeLbl.textContent = `${fmt(t)} / ${fmt(duration)}`;
-      // Periodic buffer eviction to cap memory
-      engine.evict(t);
     });
 
     /* ── Slider interaction ── */
