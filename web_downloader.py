@@ -388,7 +388,7 @@ class DownloaderBackend:
                     resolve_search_domains(force_refresh=True)
                 except Exception as e:
                     print(f"[-] Modlist poller error: {e}", flush=True)
-                time.sleep(30)
+                time.sleep(1800)  # Poll every 30 minutes
         threading.Thread(target=_poll, daemon=True).start()
 
     def _get_telegram_ready_status(self):
