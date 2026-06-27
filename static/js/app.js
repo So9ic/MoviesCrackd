@@ -10,6 +10,11 @@
     let trendingMoviesList = [];
     let cardProgressCreep = {};
 
+    function setTabsDisplay(displayVal) {
+      const tabs = document.querySelector('.tabs-container');
+      if (tabs) tabs.style.display = displayVal;
+    }
+
     function getOrCreateClientId() {
       let id = localStorage.getItem('moviescrackd_client_id');
       if (!id) {
@@ -121,10 +126,10 @@
       document.querySelectorAll('.view-panel').forEach(panel => panel.classList.remove('active'));
       
       if (tab === 'search') {
-        document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
+        document.querySelector('.tab-btn:nth-child(1)')?.classList.add('active');
         document.getElementById('search-view').classList.add('active');
       } else {
-        document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
+        document.querySelector('.tab-btn:nth-child(2)')?.classList.add('active');
         document.getElementById('direct-view').classList.add('active');
         
         // Hide details and cleanly restore search view elements under-the-hood
@@ -981,7 +986,7 @@
       if (bgElement) bgElement.style.opacity = '0';
       document.querySelector('.search-bar-row').style.display = 'block';
       document.querySelector('.categories-row').style.display = 'flex';
-      document.querySelector('.tabs-container').style.display = 'flex';
+      setTabsDisplay('flex');
       
       detailPanel.style.display = 'none';
       resultsDiv.style.display = 'grid';
@@ -1464,7 +1469,7 @@
       // Hide search bar, category buttons, tabs bar, and search card grid
       document.querySelector('.search-bar-row').style.display = 'none';
       document.querySelector('.categories-row').style.display = 'none';
-      document.querySelector('.tabs-container').style.display = 'none';
+      setTabsDisplay('none');
       resultsDiv.style.display = 'none';
       
       detailPanel.style.display = 'flex';
@@ -1791,7 +1796,7 @@
       // Restore search bar, categories, and tabs bar visibility
       document.querySelector('.search-bar-row').style.display = 'block';
       document.querySelector('.categories-row').style.display = 'flex';
-      document.querySelector('.tabs-container').style.display = 'flex';
+      setTabsDisplay('flex');
       
       document.getElementById('detail-panel').style.display = 'none';
       const q = document.getElementById('search-box').value.trim();
@@ -1803,11 +1808,11 @@
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.view-panel').forEach(panel => panel.classList.remove('active'));
       
-      document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
+      document.querySelector('.tab-btn:nth-child(2)')?.classList.add('active');
       document.getElementById('direct-view').classList.add('active');
       
       // Hide the top header navigation tabs & direct input box
-      document.querySelector('.tabs-container').style.display = 'none';
+      setTabsDisplay('none');
       document.querySelector('.direct-input-row').style.display = 'none';
       
       // Show the premium back button
@@ -1820,7 +1825,7 @@
       document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
       document.querySelectorAll('.view-panel').forEach(panel => panel.classList.remove('active'));
       
-      document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
+      document.querySelector('.tab-btn:nth-child(1)')?.classList.add('active');
       document.getElementById('search-view').classList.add('active');
       
       // Hide the back button, restore direct input row
@@ -1828,7 +1833,7 @@
       document.querySelector('.direct-input-row').style.display = 'flex';
       
       // Keep tabs container hidden since the user is in details view
-      document.querySelector('.tabs-container').style.display = 'none';
+      setTabsDisplay('none');
     }
 
     // Download API communication handlers
