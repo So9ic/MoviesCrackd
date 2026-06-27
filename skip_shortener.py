@@ -11,6 +11,8 @@ Flow:
 
 import re
 import sys
+import threading
+import time
 from urllib.parse import urlparse
 import requests
 from html.parser import HTMLParser
@@ -99,17 +101,29 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
     except Exception:
         shortener_domain = default_domain
 
-    resp = session.post(
-        post_url,
-        data=post_data,
-        headers={
-            'Referer': referer,
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': f'https://{shortener_domain}',
-        },
-        allow_redirects=True,
-    )
-    resp.raise_for_status()
+    resp = None
+    for attempt in range(3):
+        try:
+            resp = session.post(
+                post_url,
+                data=post_data,
+                headers={
+                    'Referer': referer,
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Origin': f'https://{shortener_domain}',
+                },
+                allow_redirects=True,
+                timeout=15
+            )
+            if resp.status_code in (500, 502, 503, 504):
+                resp.raise_for_status()
+            break
+        except Exception as e:
+            if verbose:
+                print(f"    [-] POST attempt {attempt+1} failed: {e}")
+            if attempt == 2:
+                raise e
+            time.sleep(1.5 * (attempt + 1))
 
     if verbose:
         print(f"    Status: {resp.status_code}, URL: {resp.url}")
@@ -120,6 +134,7 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
 
 # Cache the last known working shortener domain globally
 LAST_WORKING_DOMAIN = 'health.jkssbworld.in'
+BYPASS_LOCK = threading.RLock()
 
 
 def bypass_shortener(url: str, verbose: bool = True, session: requests.Session = None) -> str:
@@ -127,174 +142,199 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
     Bypass the URL shortener and return the final URL.
     Accepts an optional pre-configured session for connection reuse.
     """
-    global LAST_WORKING_DOMAIN
+    global LAST_WORKING_DOMAIN, BYPASS_LOCK
 
-    if session is None:
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': (
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                'AppleWebKit/537.36 (KHTML, like Gecko) '
-                'Chrome/131.0.0.0 Safari/537.36'
-            ),
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-        })
+    with BYPASS_LOCK:
+        if session is None:
+            session = requests.Session()
+            session.headers.update({
+                'User-Agent': (
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/131.0.0.0 Safari/537.36'
+                ),
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+            })
 
-    # Get shortener domain dynamically from the input URL
-    try:
-        parsed_url = urlparse(url)
-        initial_domain = parsed_url.netloc or LAST_WORKING_DOMAIN
-    except Exception:
-        initial_domain = LAST_WORKING_DOMAIN
-
-    # Proactive self-healing domain swap if we know the domain is down/failing
-    if initial_domain and LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
-        if 'unblockedgames' in initial_domain:
-            if verbose:
-                print(f"[*] Proactive domain swap: replacing {initial_domain} with last working domain {LAST_WORKING_DOMAIN}")
-            url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
+        # Get shortener domain dynamically from the input URL
+        try:
+            parsed_url = urlparse(url)
+            initial_domain = parsed_url.netloc or LAST_WORKING_DOMAIN
+        except Exception:
             initial_domain = LAST_WORKING_DOMAIN
 
-    # ── Step 1: GET the ?sid= landing page ──
-    if verbose:
-        print("[1] Fetching landing page...")
-    try:
-        resp = session.get(url, allow_redirects=True, timeout=10)
-        resp.raise_for_status()
-    except Exception as e:
-        # Self-healing fallback: if the request fails, swap domain to our last working domain and retry!
-        if LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
-            if verbose:
-                print(f"[-] GET failed: {e}. Swapping domain {initial_domain} to fallback {LAST_WORKING_DOMAIN} and retrying...")
-            url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
-            initial_domain = LAST_WORKING_DOMAIN
-            resp = session.get(url, allow_redirects=True, timeout=10)
-            resp.raise_for_status()
-        else:
+        # Proactive self-healing domain swap if we know the domain is down/failing
+        if initial_domain and LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
+            if 'unblockedgames' in initial_domain:
+                if verbose:
+                    print(f"[*] Proactive domain swap: replacing {initial_domain} with last working domain {LAST_WORKING_DOMAIN}")
+                url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
+                initial_domain = LAST_WORKING_DOMAIN
+
+        # ── Step 1: GET the ?sid= landing page ──
+        if verbose:
+            print("[1] Fetching landing page...")
+        try:
+            resp = None
+            for attempt in range(3):
+                try:
+                    resp = session.get(url, allow_redirects=True, timeout=15)
+                    if resp.status_code in (500, 502, 503, 504):
+                        resp.raise_for_status()
+                    break
+                except Exception as e:
+                    if verbose:
+                        print(f"    [-] GET attempt {attempt+1} failed: {e}")
+                    if attempt == 2:
+                        # Fallback to domain swap if we have one and haven't tried it
+                        if LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
+                            if verbose:
+                                print(f"[-] GET failed on all attempts. Swapping to fallback {LAST_WORKING_DOMAIN}...")
+                            url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
+                            initial_domain = LAST_WORKING_DOMAIN
+                            # Recursive retry with fallback domain
+                            return bypass_shortener(url, verbose, session)
+                        raise e
+                    time.sleep(1.5 * (attempt + 1))
+        except Exception as e:
             raise e
 
-    if verbose:
-        print(f"    Status: {resp.status_code}, URL: {resp.url}")
-
-    current_html = resp.text
-    current_url = resp.url
-
-    # Save the successful domain to our global cache
-    try:
-        last_netloc = urlparse(current_url).netloc
-        if last_netloc:
-            LAST_WORKING_DOMAIN = last_netloc
-    except Exception:
-        pass
-
-    # ── Step 2+: Keep POSTing forms until we find the cookie ──
-    step = 2
-    max_steps = 5  # safety limit
-
-    while step <= max_steps:
-        cookie_name, cookie_value = extract_cookie_call(current_html)
-        if cookie_name and cookie_value:
-            break
-
-        # Check if there's another form to submit
-        forms = extract_forms(current_html)
-        if not forms:
-            if verbose:
-                print(f"\n[{step}] No more forms and no cookie found!")
-            break
-
-        resp, current_html = do_post_step(
-            session, current_html, step, current_url, verbose, default_domain=initial_domain
-        )
-        if resp is None:
-            break
-        current_url = resp.url
-        step += 1
-
-    if not cookie_name or not cookie_value:
-        print("\nERROR: Could not extract cookie from page!")
-        # Debug output
-        s_calls = re.findall(r"s_\d+\([^)]+\)", current_html)
-        if s_calls:
-            print(f"  Found s_ calls: {s_calls[:3]}")
-        pepe_matches = re.findall(r"pepe-[a-f0-9]+", current_html)
-        if pepe_matches:
-            print(f"  Found pepe patterns: {pepe_matches}")
-
-        with open("/tmp/shortener_debug.html", "w") as f:
-            f.write(current_html)
-        print("  Full page saved to /tmp/shortener_debug.html")
-        sys.exit(1)
-
-    if verbose:
-        print(f"\n[{step}] Extracted cookie:")
-        print(f"    Name:  {cookie_name}")
-        print(f"    Value: {cookie_value[:80]}...")
-
-    try:
-        shortener_domain = urlparse(current_url).netloc or initial_domain
-    except Exception:
-        shortener_domain = initial_domain
-
-    # ── Set the cookie ──
-    session.cookies.set(
-        cookie_name,
-        cookie_value,
-        domain=shortener_domain,
-        path='/',
-    )
-    if verbose:
-        print(f"\n[{step + 1}] Cookie set in session")
-
-    # ── Follow the ?go= redirect ──
-    go_url = f"https://{shortener_domain}/?go={cookie_name}"
-    if verbose:
-        print(f"\n[{step + 2}] Following redirect: {go_url}")
-
-    resp_final = session.get(
-        go_url,
-        headers={'Referer': current_url},
-        allow_redirects=True,
-    )
-    resp_final.raise_for_status()
-
-    final_url = resp_final.url
-
-    # If we're still on the shortener domain, try to find the real destination
-    final_domain_lower = urlparse(final_url).netloc.lower()
-    if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
         if verbose:
-            print("    Still on shortener domain, looking for destination...")
+            print(f"    Status: {resp.status_code}, URL: {resp.url}")
 
-        for pattern in [
-            r'href=["\']([^"\']*driveseed[^"\']*)["\']',
-            r'href=["\']([^"\']*drive\.[^"\']*)["\']',
-            r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']',
-            r'http-equiv=["\']refresh["\'][^>]*url=([^"\'>\s]+)',
-            r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>.*?(?:download|destination)',
-        ]:
-            m = re.search(pattern, resp_final.text, re.IGNORECASE)
-            if m:
-                candidate = m.group(1)
-                candidate_domain = urlparse(candidate).netloc.lower()
-                if shortener_domain.lower() not in candidate_domain and 'unblockedgames' not in candidate_domain:
-                    final_url = candidate
-                    break
+        current_html = resp.text
+        current_url = resp.url
 
+        # Save the successful domain to our global cache
+        try:
+            last_netloc = urlparse(current_url).netloc
+            if last_netloc:
+                LAST_WORKING_DOMAIN = last_netloc
+        except Exception:
+            pass
+
+        # ── Step 2+: Keep POSTing forms until we find the cookie ──
+        step = 2
+        max_steps = 5  # safety limit
+
+        while step <= max_steps:
+            cookie_name, cookie_value = extract_cookie_call(current_html)
+            if cookie_name and cookie_value:
+                break
+
+            # Check if there's another form to submit
+            forms = extract_forms(current_html)
+            if not forms:
+                if verbose:
+                    print(f"\n[{step}] No more forms and no cookie found!")
+                break
+
+            resp, current_html = do_post_step(
+                session, current_html, step, current_url, verbose, default_domain=initial_domain
+            )
+            if resp is None:
+                break
+            current_url = resp.url
+            step += 1
+
+        if not cookie_name or not cookie_value:
+            print("\nERROR: Could not extract cookie from page!")
+            # Debug output
+            s_calls = re.findall(r"s_\d+\([^)]+\)", current_html)
+            if s_calls:
+                print(f"  Found s_ calls: {s_calls[:3]}")
+            pepe_matches = re.findall(r"pepe-[a-f0-9]+", current_html)
+            if pepe_matches:
+                print(f"  Found pepe patterns: {pepe_matches}")
+
+            with open("/tmp/shortener_debug.html", "w") as f:
+                f.write(current_html)
+            print("  Full page saved to /tmp/shortener_debug.html")
+            sys.exit(1)
+
+        if verbose:
+            print(f"\n[{step}] Extracted cookie:")
+            print(f"    Name:  {cookie_name}")
+            print(f"    Value: {cookie_value[:80]}...")
+
+        try:
+            shortener_domain = urlparse(current_url).netloc or initial_domain
+        except Exception:
+            shortener_domain = initial_domain
+
+        # ── Set the cookie ──
+        session.cookies.set(
+            cookie_name,
+            cookie_value,
+            domain=shortener_domain,
+            path='/',
+        )
+        if verbose:
+            print(f"\n[{step + 1}] Cookie set in session")
+
+        # ── Follow the ?go= redirect ──
+        go_url = f"https://{shortener_domain}/?go={cookie_name}"
+        if verbose:
+            print(f"\n[{step + 2}] Following redirect: {go_url}")
+
+        resp_final = None
+        for attempt in range(3):
+            try:
+                resp_final = session.get(
+                    go_url,
+                    headers={'Referer': current_url},
+                    allow_redirects=True,
+                    timeout=15
+                )
+                if resp_final.status_code in (500, 502, 503, 504):
+                    resp_final.raise_for_status()
+                break
+            except Exception as e:
+                if verbose:
+                    print(f"    [-] GET ?go= attempt {attempt+1} failed: {e}")
+                if attempt == 2:
+                    raise e
+                time.sleep(1.5 * (attempt + 1))
+
+        final_url = resp_final.url
+
+        # If we're still on the shortener domain, try to find the real destination
         final_domain_lower = urlparse(final_url).netloc.lower()
         if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
-            with open("/tmp/shortener_final_debug.html", "w") as f:
-                f.write(resp_final.text)
             if verbose:
-                print("    Could not resolve final URL. Page saved to /tmp/shortener_final_debug.html")
+                print("    Still on shortener domain, looking for destination...")
 
-    if verbose:
-        print(f"\n{'=' * 60}")
-        print(f"  FINAL URL: {final_url}")
-        print(f"{'=' * 60}")
+            for pattern in [
+                r'href=["\']([^"\']*driveseed[^"\']*)["\']',
+                r'href=["\']([^"\']*drive\.[^"\']*)["\']',
+                r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']',
+                r'http-equiv=["\']refresh["\'][^>]*url=([^"\'>\s]+)',
+                r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>.*?(?:download|destination)',
+            ]:
+                m = re.search(pattern, resp_final.text, re.IGNORECASE)
+                if m:
+                    candidate = m.group(1)
+                    candidate_domain = urlparse(candidate).netloc.lower()
+                    if shortener_domain.lower() not in candidate_domain and 'unblockedgames' not in candidate_domain:
+                        final_url = candidate
+                        break
 
-    return final_url
+            final_domain_lower = urlparse(final_url).netloc.lower()
+            if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
+                with open("/tmp/shortener_final_debug.html", "w") as f:
+                    f.write(resp_final.text)
+                if verbose:
+                    print("    Could not resolve final URL. Page saved to /tmp/shortener_final_debug.html")
+
+        if verbose:
+            print(f"\n{'=' * 60}")
+            print(f"  FINAL URL: {final_url}")
+            print(f"{'=' * 60}")
+
+        # Add a tiny delay between requests to be gentle to the server
+        time.sleep(0.8)
+        return final_url
 
 
 if __name__ == '__main__':
