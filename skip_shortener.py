@@ -118,11 +118,17 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
     return resp, resp.text
 
 
+# Cache the last known working shortener domain globally
+LAST_WORKING_DOMAIN = 'health.jkssbworld.in'
+
+
 def bypass_shortener(url: str, verbose: bool = True, session: requests.Session = None) -> str:
     """
     Bypass the URL shortener and return the final URL.
     Accepts an optional pre-configured session for connection reuse.
     """
+    global LAST_WORKING_DOMAIN
+
     if session is None:
         session = requests.Session()
         session.headers.update({
@@ -138,20 +144,49 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
     # Get shortener domain dynamically from the input URL
     try:
         parsed_url = urlparse(url)
-        initial_domain = parsed_url.netloc or 'health.jkssbworld.in'
+        initial_domain = parsed_url.netloc or LAST_WORKING_DOMAIN
     except Exception:
-        initial_domain = 'health.jkssbworld.in'
+        initial_domain = LAST_WORKING_DOMAIN
+
+    # Proactive self-healing domain swap if we know the domain is down/failing
+    if initial_domain and LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
+        if 'unblockedgames' in initial_domain:
+            if verbose:
+                print(f"[*] Proactive domain swap: replacing {initial_domain} with last working domain {LAST_WORKING_DOMAIN}")
+            url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
+            initial_domain = LAST_WORKING_DOMAIN
 
     # ── Step 1: GET the ?sid= landing page ──
     if verbose:
         print("[1] Fetching landing page...")
-    resp = session.get(url, allow_redirects=True)
-    resp.raise_for_status()
+    try:
+        resp = session.get(url, allow_redirects=True, timeout=10)
+        resp.raise_for_status()
+    except Exception as e:
+        # Self-healing fallback: if the request fails, swap domain to our last working domain and retry!
+        if LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
+            if verbose:
+                print(f"[-] GET failed: {e}. Swapping domain {initial_domain} to fallback {LAST_WORKING_DOMAIN} and retrying...")
+            url = url.replace(initial_domain, LAST_WORKING_DOMAIN)
+            initial_domain = LAST_WORKING_DOMAIN
+            resp = session.get(url, allow_redirects=True, timeout=10)
+            resp.raise_for_status()
+        else:
+            raise e
+
     if verbose:
         print(f"    Status: {resp.status_code}, URL: {resp.url}")
 
     current_html = resp.text
     current_url = resp.url
+
+    # Save the successful domain to our global cache
+    try:
+        last_netloc = urlparse(current_url).netloc
+        if last_netloc:
+            LAST_WORKING_DOMAIN = last_netloc
+    except Exception:
+        pass
 
     # ── Step 2+: Keep POSTing forms until we find the cookie ──
     step = 2

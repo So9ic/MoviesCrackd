@@ -2270,11 +2270,14 @@ class DownloaderApp(ctk.CTk):
                     try:
                         idx, item = future.result()
                     except Exception as e:
+                        orig_link = links[idx] if idx < len(links) else None
                         item = {
-                            "filename": f"Failed link {idx + 1}",
+                            "filename": orig_link.get("name") if orig_link else f"Failed link {idx + 1}",
                             "download_url": None,
                             "method": "",
                             "error": str(e),
+                            "source_link": orig_link,
+                            "source_index": idx,
                         }
 
                     done_count += 1
@@ -2730,41 +2733,152 @@ class DownloaderApp(ctk.CTk):
         self.after(0, lambda: self.go_btn.configure(state="normal"))
 
     def _retry_failed(self):
-        """Re-queue all failed downloads."""
+        """Re-queue all failed downloads and retry failed resolutions."""
         self.retry_btn.grid_remove()
         retry_http = 0
         retry_manual = 0
+        retry_resolve = 0
 
         for i, card in enumerate(self.cards):
             if card.state == DownloadCard.STATE_FAILED:
                 item = getattr(card, "item_data", None)
-                if item and item.get("download_url"):
-                    card.mark_pending()
-                    if item.get("method") == "TELEGRAM":
-                        self._prepare_telegram_manual_card(i, item)
-                        retry_manual += 1
+                if item:
+                    if item.get("download_url"):
+                        card.mark_pending()
+                        if item.get("method") == "TELEGRAM":
+                            self._prepare_telegram_manual_card(i, item)
+                            retry_manual += 1
+                        else:
+                            self.download_queue.put((i, item))
+                            retry_http += 1
+                        with self._lock:
+                            self._fail_count -= 1
+                    elif item.get("source_link"):
+                        card.mark_pending()
+                        card.set_status("Re-resolving…")
+                        retry_resolve += 1
+                        with self._lock:
+                            self._fail_count -= 1
+                        # Spawn background thread to re-resolve the link
+                        threading.Thread(
+                            target=self._resolve_card_retry,
+                            args=(i, item.get("source_link")),
+                            daemon=True
+                        ).start()
                     else:
-                        self.download_queue.put((i, item))
-                        retry_http += 1
-                    with self._lock:
-                        self._fail_count -= 1
+                        card.set_detail("Cannot retry: no link data")
                 else:
-                    card.set_detail("Cannot retry unresolved link")
+                    card.set_detail("Cannot retry: no card data")
 
-        if retry_http or retry_manual:
-            msg = ""
+        if retry_http or retry_manual or retry_resolve:
+            msg_parts = []
             if retry_http:
-                msg = f"Retrying {retry_http} failed download(s)…"
+                msg_parts.append(f"Retrying {retry_http} failed download(s)…")
+            if retry_resolve:
+                msg_parts.append(f"Re-resolving {retry_resolve} failed link(s)…")
             if retry_manual:
-                manual_msg = f"{retry_manual} Telegram item(s) ready for manual download"
-                msg = f"{msg}  •  {manual_msg}" if msg else manual_msg
-            self._update_status(msg)
+                msg_parts.append(f"{retry_manual} Telegram item(s) ready for manual download")
+            self._update_status("  •  ".join(msg_parts))
 
         if retry_http:
             for _ in range(min(MAX_CONCURRENT, retry_http)):
                 threading.Thread(target=self._download_worker, daemon=True).start()
-        elif not retry_manual:
-            self._update_status("No retryable downloads (links failed to resolve)")
+        elif not retry_manual and not retry_resolve:
+            self._update_status("No retryable items found")
+
+    def _resolve_card_retry(self, idx, link):
+        """Re-resolve a single link that failed during the initial resolution phase."""
+        try:
+            _, name, ds_url = resolve_link(idx, link, session=SESSION)
+            source_link = dict(link) if isinstance(link, dict) else None
+            size_hint = parse_size_hint_bytes(name)
+            origin_url = link.get("url", "") if isinstance(link, dict) else ""
+            origin_meta_size = None
+            if "driveseed.org" in origin_url:
+                _, origin_meta_size = get_driveseed_file_metadata(origin_url)
+
+            expected_size = origin_meta_size or size_hint
+
+            if ds_url and "tgseed.link" in ds_url:
+                fname = name or f"Link {idx + 1}"
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                item = {
+                    "filename": fname,
+                    "download_url": ds_url,
+                    "method": "TELEGRAM",
+                    "target_dir": self.output_dir,
+                    "expected_size_bytes": expected_size,
+                    "source_link": source_link,
+                    "source_index": idx,
+                    "source_name_hint": name,
+                    "source_driveseed_url": None,
+                }
+            elif ds_url and ".r2.dev/" in ds_url:
+                fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{idx + 1}"
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                item = {
+                    "filename": fname,
+                    "download_url": ds_url,
+                    "method": "CLOUD",
+                    "target_dir": self.output_dir,
+                    "expected_size_bytes": expected_size,
+                    "source_link": source_link,
+                    "source_index": idx,
+                    "source_name_hint": name,
+                    "source_driveseed_url": None,
+                }
+            elif not ds_url or "driveseed.org" not in ds_url:
+                raise ValueError("Not a driveseed link")
+            else:
+                meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
+                meta_size = raw_meta_size or expected_size
+                dl_url, fname, method = get_driveseed_download_url(ds_url)
+                if not fname:
+                    fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{idx + 1}"
+                fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                item = {
+                    "filename": fname,
+                    "download_url": dl_url,
+                    "method": method,
+                    "target_dir": self.output_dir,
+                    "expected_size_bytes": meta_size,
+                    "source_link": source_link,
+                    "source_index": idx,
+                    "source_name_hint": name,
+                    "source_driveseed_url": ds_url,
+                }
+
+            # Update the card and queue for download
+            fname = item["filename"]
+            existing = set(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else set()
+            if fname in existing:
+                self.after(0, lambda: self._update_card_done_skip(idx, item))
+                with self._lock:
+                    self._done_count += 1
+            else:
+                self.after(0, lambda: self._update_card_ready(idx, item))
+                if item.get("method") == "TELEGRAM":
+                    self.after(0, lambda: self._prepare_telegram_manual_card(idx, item))
+                else:
+                    self.download_queue.put((idx, item))
+                    with self._lock:
+                        if self._active_threads < MAX_CONCURRENT:
+                            threading.Thread(target=self._download_worker, daemon=True).start()
+            self.after(0, self._refresh_status)
+
+        except Exception as e:
+            item = {
+                "filename": link.get("name") if isinstance(link, dict) else f"Failed link {idx + 1}",
+                "download_url": None,
+                "method": "",
+                "error": str(e),
+                "source_link": link,
+                "source_index": idx,
+            }
+            self.after(0, lambda: self._update_card_failed(idx, item))
+            with self._lock:
+                self._fail_count += 1
+            self.after(0, self._refresh_status)
 
 
 if __name__ == "__main__":

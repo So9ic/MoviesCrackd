@@ -560,11 +560,14 @@ class DownloaderBackend:
                     try:
                         idx, item = future.result()
                     except Exception as e:
+                        orig_link = links[idx] if idx < len(links) else None
                         item = {
-                            "filename": f"Failed link {idx + 1}",
+                            "filename": orig_link.get("name") if orig_link else f"Failed link {idx + 1}",
                             "download_url": None,
                             "method": "",
                             "error": str(e),
+                            "source_link": orig_link,
+                            "source_index": idx,
                         }
 
                     done_count += 1
@@ -859,6 +862,124 @@ class DownloaderBackend:
         if m > 0:
             return f"{m}m {s}s"
         return f"{s}s"
+
+    def resolve_card_retry(self, idx, link):
+        """Re-resolve a single link that failed during the initial resolution phase."""
+        if idx >= len(self.cards):
+            return
+        card = self.cards[idx]
+        card.mark_pending()
+        card.set_status("Re-resolving…")
+        
+        def _task():
+            try:
+                _, name, ds_url = resolve_link(idx, link, session=SESSION)
+                source_link = dict(link) if isinstance(link, dict) else None
+                size_hint = parse_size_hint_bytes(name)
+                origin_url = link.get("url", "") if isinstance(link, dict) else ""
+                origin_meta_size = None
+                if "driveseed.org" in origin_url:
+                    _, origin_meta_size = get_driveseed_file_metadata(origin_url)
+
+                expected_size = origin_meta_size or size_hint
+
+                if ds_url and "tgseed.link" in ds_url:
+                    fname = name or f"Link {idx + 1}"
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                    item = {
+                        "filename": fname,
+                        "download_url": ds_url,
+                        "method": "TELEGRAM",
+                        "target_dir": self.output_dir,
+                        "expected_size_bytes": expected_size,
+                        "source_link": source_link,
+                        "source_index": idx,
+                        "source_name_hint": name,
+                        "source_driveseed_url": None,
+                    }
+                elif ds_url and ".r2.dev/" in ds_url:
+                    fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{idx + 1}"
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                    item = {
+                        "filename": fname,
+                        "download_url": ds_url,
+                        "method": "CLOUD",
+                        "target_dir": self.output_dir,
+                        "expected_size_bytes": expected_size,
+                        "source_link": source_link,
+                        "source_index": idx,
+                        "source_name_hint": name,
+                        "source_driveseed_url": None,
+                    }
+                elif not ds_url or "driveseed.org" not in ds_url:
+                    raise ValueError("Not a driveseed link")
+                else:
+                    meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
+                    meta_size = raw_meta_size or expected_size
+                    dl_url, fname, method = get_driveseed_download_url(ds_url)
+                    if not fname:
+                        fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{idx + 1}"
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                    item = {
+                        "filename": fname,
+                        "download_url": dl_url,
+                        "method": method,
+                        "target_dir": self.output_dir,
+                        "expected_size_bytes": meta_size,
+                        "source_link": source_link,
+                        "source_index": idx,
+                        "source_name_hint": name,
+                        "source_driveseed_url": ds_url,
+                    }
+
+                card.filename = item["filename"]
+                card.set_method(item.get("method", ""))
+                card.item_data = item
+                card.url = item.get("download_url", "")
+
+                existing = set(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else set()
+                if item["filename"] in existing:
+                    card.set_detail("Already downloaded")
+                    card.mark_done()
+                    with self._lock:
+                        self._done_count += 1
+                else:
+                    if item.get("method") == "TELEGRAM":
+                        card.set_status("Manual Telegram")
+                        exp = item.get("expected_size_bytes")
+                        card.set_detail(f"Click Download to open Telegram Desktop. Expected: {fmt_bytes(exp)}" if exp else "Click Download to open Telegram Desktop.")
+                        card.set_action("Download", lambda index=idx: self.start_telegram_manual(index))
+                    else:
+                        if self.cloud_mode:
+                            card.status = "✓ Ready"
+                            card.state = 2
+                            card.progress = 1.0
+                            card.detail = "Direct link resolved! Click 'Download to Device' below."
+                            with self._lock:
+                                self._done_count += 1
+                        else:
+                            card.set_status("Queued")
+                            self.download_queue.put((idx, item))
+                            with self._lock:
+                                if self._active_threads < MAX_CONCURRENT:
+                                    threading.Thread(target=self._download_worker, daemon=True).start()
+            except Exception as e:
+                item = {
+                    "filename": link.get("name") if isinstance(link, dict) else f"Failed link {idx + 1}",
+                    "download_url": None,
+                    "method": "",
+                    "error": str(e),
+                    "source_link": link,
+                    "source_index": idx,
+                }
+                card.filename = item["filename"]
+                card.set_method(item.get("method", ""))
+                card.item_data = item
+                card.mark_failed(str(e))
+                with self._lock:
+                    self._fail_count += 1
+        
+        threading.Thread(target=_task, daemon=True).start()
 
     # ── Advanced Telegram Manual Download logic ──
     def start_telegram_manual(self, idx, is_retry=False):
@@ -3630,9 +3751,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 
                 if item.get("method") == "TELEGRAM":
                     DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
-                else:
+                elif item.get("download_url"):
                     DOWNLOAD_MGR.download_queue.put((idx, item))
                     threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
+                elif item.get("source_link"):
+                    DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
 
                 self.send_json({"status": "success"})
             except Exception as e:
@@ -3651,8 +3774,10 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     retried += 1
                     if item.get("method") == "TELEGRAM":
                         DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
-                    else:
+                    elif item.get("download_url"):
                         DOWNLOAD_MGR.download_queue.put((idx, item))
+                    elif item.get("source_link"):
+                        DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
             
             if retried > 0:
                 threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
