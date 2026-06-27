@@ -227,7 +227,7 @@ def prewarm_dns():
 
 MAX_CONCURRENT = 2
 CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
-MAX_RESOLVE_RETRIES = 3  # Maximum retry attempts for failed link resolutions
+MAX_AUTO_RETRIES = 3  # Automatic silent retry attempts before showing manual Retry button
 
 TELEGRAM_VERBOSE_DEBUG = (
     os.getenv("TELEGRAM_VERBOSE_DEBUG", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -326,12 +326,7 @@ class VirtualDownloadCard:
         self.progress = 0.0
         if reason:
             self.detail = reason
-        # Only show Retry button if we haven't exceeded max retries
-        if self.retry_count >= MAX_RESOLVE_RETRIES:
-            self.detail = f"{reason} (max retries reached)" if reason else "Max retries reached"
-            self.set_action("")
-        else:
-            self.set_action("Retry")
+        self.set_action("Retry")
 
     def mark_downloading(self):
         self.state = 1
@@ -362,8 +357,6 @@ class VirtualDownloadCard:
             "action_state": self.action_state,
             "resolved_url": self.url,
             "size": size_str,
-            "retry_count": self.retry_count,
-            "max_retries_reached": self.retry_count >= MAX_RESOLVE_RETRIES,
         }
 
 
@@ -499,115 +492,125 @@ class DownloaderBackend:
                 Fire-and-forget worker: independently resolves one link and
                 updates its card immediately — no futures/as_completed blocking.
                 Each card appears on the UI as soon as it finishes resolving.
+                Auto-retries up to MAX_AUTO_RETRIES times on failure before
+                marking as failed with a manual Retry button.
                 """
                 card = self.cards[i]
-                try:
-                    # Phase 1: Shortener bypass → get name + driveseed URL
-                    card.set_status("Bypassing shortener…")
-                    card.set_progress(0.4)
-                    _, name, ds_url = resolve_link(i, link, session=SESSION)
-                    source_link = dict(link) if isinstance(link, dict) else None
+                last_error = "Unknown error"
+                best_name = None  # Preserve the best filename across retries
 
-                    # Show filename on card immediately (visible in next poll)
-                    if name:
-                        card.filename = name
+                for attempt in range(MAX_AUTO_RETRIES):
+                    try:
+                        if attempt > 0:
+                            # Brief pause between auto-retries, then reset animation
+                            time.sleep(0.5)
+                            card.set_status("Resolving…")
+                            card.set_progress(0.15)
 
-                    size_hint = parse_size_hint_bytes(name)
-                    origin_url = link.get("url", "") if isinstance(link, dict) else ""
-                    origin_meta_size = None
-                    if "driveseed.org" in origin_url:
-                        try:
-                            _, origin_meta_size = get_driveseed_file_metadata(origin_url)
-                        except Exception:
-                            pass
+                        # Phase 1: Shortener bypass → get name + driveseed URL
+                        card.set_status("Bypassing shortener…")
+                        card.set_progress(0.4)
+                        _, name, ds_url = resolve_link(i, link, session=SESSION)
+                        source_link = dict(link) if isinstance(link, dict) else None
 
-                    expected_size = origin_meta_size or size_hint
+                        # Show filename on card immediately (visible in next poll)
+                        if name:
+                            card.filename = name
+                            best_name = name
 
-                    # ── Telegram link ──
-                    if ds_url and "tgseed.link" in ds_url:
-                        fname = name or f"Link {i + 1}"
+                        size_hint = parse_size_hint_bytes(name)
+                        origin_url = link.get("url", "") if isinstance(link, dict) else ""
+                        origin_meta_size = None
+                        if "driveseed.org" in origin_url:
+                            try:
+                                _, origin_meta_size = get_driveseed_file_metadata(origin_url)
+                            except Exception:
+                                pass
+
+                        expected_size = origin_meta_size or size_hint
+
+                        # ── Telegram link ──
+                        if ds_url and "tgseed.link" in ds_url:
+                            fname = name or f"Link {i + 1}"
+                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                            item = {
+                                "filename": fname,
+                                "download_url": ds_url,
+                                "method": "TELEGRAM",
+                                "target_dir": self.output_dir,
+                                "expected_size_bytes": expected_size,
+                                "source_link": source_link,
+                                "source_index": i,
+                                "source_name_hint": name,
+                                "source_driveseed_url": None,
+                            }
+                            self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                            return  # Success!
+
+                        # ── Direct Cloud R2 link ──
+                        if ds_url and ".r2.dev/" in ds_url:
+                            fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{i + 1}"
+                            fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                            item = {
+                                "filename": fname,
+                                "download_url": ds_url,
+                                "method": "CLOUD",
+                                "target_dir": self.output_dir,
+                                "expected_size_bytes": expected_size,
+                                "source_link": source_link,
+                                "source_index": i,
+                                "source_name_hint": name,
+                                "source_driveseed_url": None,
+                            }
+                            self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                            return  # Success!
+
+                        # ── Not a valid link — auto-retry ──
+                        if not ds_url or "driveseed.org" not in ds_url:
+                            last_error = "Not a driveseed link"
+                            continue  # Auto-retry
+
+                        # Phase 2: Driveseed resolution → get direct download URL + size
+                        card.set_status("Resolving driveseed…")
+                        card.set_progress(0.8)
+
+                        meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
+                        meta_size = raw_meta_size or expected_size
+                        dl_url, fname, method = get_driveseed_download_url(ds_url)
+                        if not fname:
+                            fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{i + 1}"
                         fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+
                         item = {
                             "filename": fname,
-                            "download_url": ds_url,
-                            "method": "TELEGRAM",
+                            "download_url": dl_url,
+                            "method": method,
                             "target_dir": self.output_dir,
-                            "expected_size_bytes": expected_size,
+                            "expected_size_bytes": meta_size,
                             "source_link": source_link,
                             "source_index": i,
                             "source_name_hint": name,
-                            "source_driveseed_url": None,
+                            "source_driveseed_url": ds_url,
                         }
                         self._finalize_card(card, i, item, existing, workers_started, workers_lock)
-                        return
+                        return  # Success!
 
-                    # ── Direct Cloud R2 link ──
-                    if ds_url and ".r2.dev/" in ds_url:
-                        fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{i + 1}"
-                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
-                        item = {
-                            "filename": fname,
-                            "download_url": ds_url,
-                            "method": "CLOUD",
-                            "target_dir": self.output_dir,
-                            "expected_size_bytes": expected_size,
-                            "source_link": source_link,
-                            "source_index": i,
-                            "source_name_hint": name,
-                            "source_driveseed_url": None,
-                        }
-                        self._finalize_card(card, i, item, existing, workers_started, workers_lock)
-                        return
+                    except Exception as e:
+                        last_error = str(e)
+                        continue  # Auto-retry
 
-                    # ── Not a valid link ──
-                    if not ds_url or "driveseed.org" not in ds_url:
-                        card.filename = name or f"Link {i + 1}"
-                        card.item_data = {
-                            "source_link": source_link,
-                            "source_index": i,
-                            "source_name_hint": name,
-                        }
-                        card.mark_failed("Not a driveseed link")
-                        with self._lock:
-                            self._fail_count += 1
-                        return
-
-                    # Phase 2: Driveseed resolution → get direct download URL + size
-                    card.set_status("Resolving driveseed…")
-                    card.set_progress(0.8)
-
-                    meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
-                    meta_size = raw_meta_size or expected_size
-                    dl_url, fname, method = get_driveseed_download_url(ds_url)
-                    if not fname:
-                        fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{i + 1}"
-                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
-
-                    item = {
-                        "filename": fname,
-                        "download_url": dl_url,
-                        "method": method,
-                        "target_dir": self.output_dir,
-                        "expected_size_bytes": meta_size,
-                        "source_link": source_link,
-                        "source_index": i,
-                        "source_name_hint": name,
-                        "source_driveseed_url": ds_url,
-                    }
-                    self._finalize_card(card, i, item, existing, workers_started, workers_lock)
-
-                except Exception as e:
-                    orig_link = links[i] if i < len(links) else None
-                    orig_name = (orig_link.get("name") if orig_link else None) or f"Failed link {i + 1}"
-                    card.filename = orig_name
-                    card.item_data = {
-                        "source_link": orig_link,
-                        "source_index": i,
-                        "source_name_hint": orig_name,
-                    }
-                    card.mark_failed(str(e))
-                    with self._lock:
-                        self._fail_count += 1
+                # All auto-retries exhausted — mark as failed with manual Retry button
+                source_link = dict(link) if isinstance(link, dict) else None
+                display_name = best_name or (link.get("name") if isinstance(link, dict) else None) or f"Failed link {i + 1}"
+                card.filename = display_name
+                card.item_data = {
+                    "source_link": source_link,
+                    "source_index": i,
+                    "source_name_hint": display_name,
+                }
+                card.mark_failed(last_error)
+                with self._lock:
+                    self._fail_count += 1
 
             # Fire all resolve threads independently (semaphore in skip_shortener
             # limits actual shortener concurrency to 3; driveseed calls are unthrottled)
@@ -908,15 +911,10 @@ class DownloaderBackend:
         return f"{s}s"
 
     def resolve_card_retry(self, idx, link):
-        """Re-resolve a single link that failed during the initial resolution phase."""
+        """Re-resolve a single link that failed during the initial resolution phase (manual retry, unlimited)."""
         if idx >= len(self.cards):
             return
         card = self.cards[idx]
-        
-        # Enforce max retry limit
-        if card.retry_count >= MAX_RESOLVE_RETRIES:
-            card.mark_failed("Max retries reached")
-            return
         
         # Decrement fail_count since we're transitioning from failed to retrying
         if card.state == 3:
@@ -925,7 +923,7 @@ class DownloaderBackend:
         
         card.retry_count += 1
         card.mark_pending()
-        card.set_status(f"Re-resolving… (attempt {card.retry_count}/{MAX_RESOLVE_RETRIES})")
+        card.set_status("Re-resolving…")
         card.set_progress(0.15)
         
         def _task():
@@ -3792,12 +3790,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": "Card has no metadata item data"}, 400)
                     return
 
-                # Enforce max retry limit
-                if card.retry_count >= MAX_RESOLVE_RETRIES:
-                    card.mark_failed("Max retries reached")
-                    self.send_json({"error": "Max retries reached", "retry_count": card.retry_count}, 429)
-                    return
-
                 # Log the retry event
                 uid = DOWNLOAD_MGR.client_id if DOWNLOAD_MGR.client_id else "anonymous"
                 active_title = getattr(DOWNLOAD_MGR, 'active_title', 'Direct URL Input')
@@ -3806,14 +3798,13 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 method = item.get("method", "")
                 
                 event_msg = (
-                    f"\ud83d\udc64 {uid:<10} | \ud83d\udd04 RETRY {card.retry_count + 1}/{MAX_RESOLVE_RETRIES} | \"{clean_title}\"\n"
-                    f"\u251c\u2500\u25ba Episode: \"{fname}\"\n"
-                    f"\u2514\u2500\u25ba Method: \"{method}\""
+                    f"👤 {uid:<10} | 🔄 RETRY     | \"{clean_title}\"\n"
+                    f"├─► Episode: \"{fname}\"\n"
+                    f"└─► Method: \"{method}\""
                 )
                 log_instant_event(event_msg)
 
                 if item.get("method") == "TELEGRAM":
-                    # Decrement fail_count + increment retry_count here (telegram path manages itself)
                     if card.state == 3:
                         with DOWNLOAD_MGR._lock:
                             DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
@@ -3821,7 +3812,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     card.mark_pending()
                     DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
                 elif item.get("download_url"):
-                    # Decrement fail_count + increment retry_count here (download worker manages itself)
                     if card.state == 3:
                         with DOWNLOAD_MGR._lock:
                             DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
@@ -3833,10 +3823,9 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
                     DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
                 else:
-                    # No actionable data — mark as permanently failed
                     card.mark_failed("No source link available for retry")
 
-                self.send_json({"status": "success", "retry_count": card.retry_count})
+                self.send_json({"status": "success"})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
@@ -3844,16 +3833,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         # 4. Retry all failed cards concurrently
         if parsed.path == '/api/retry-all':
             retried = 0
-            skipped = 0
             needs_download_worker = False
             for idx, card in enumerate(DOWNLOAD_MGR.cards):
                 if card.state == 3:  # Failed state
                     item = card.item_data
                     if not item:
-                        continue
-                    # Skip cards that have exhausted their retries
-                    if card.retry_count >= MAX_RESOLVE_RETRIES:
-                        skipped += 1
                         continue
                     retried += 1
                     if item.get("method") == "TELEGRAM":
@@ -3875,7 +3859,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             
             if needs_download_worker:
                 threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
-            self.send_json({"status": "success", "retried": retried, "skipped_max_retries": skipped})
+            self.send_json({"status": "success", "retried": retried})
             return
 
         self.send_response(404)

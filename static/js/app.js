@@ -1947,12 +1947,7 @@
           rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
         }
       } else if (dl.state === 3) {
-        if (dl.max_retries_reached) {
-          rightContent = `<span class="dl-status-compact" style="color: var(--text-dim); font-size: 0.75rem;">Max retries reached</span>`;
-        } else {
-          const attempt = (dl.retry_count || 0) + 1;
-          rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry (${attempt}/3)</button>`;
-        }
+        rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
       } else if (dl.state === 1) {
         rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
       } else {
@@ -2129,12 +2124,7 @@
                 rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
               }
             } else if (dl.state === 3) {
-              if (dl.max_retries_reached) {
-                rightContent = `<span class="dl-status-compact" style="color: var(--text-dim); font-size: 0.75rem;">Max retries reached</span>`;
-              } else {
-                const attempt = (dl.retry_count || 0) + 1;
-                rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry (${attempt}/3)</button>`;
-              }
+              rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
             } else if (dl.state === 1) {
               rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
             } else {
@@ -2199,6 +2189,33 @@
     }
 
     function retryDownload(index) {
+      // Instant visual feedback: immediately show resolving animation on the card
+      const cards = document.querySelectorAll('.download-card');
+      if (cards[index]) {
+        const cardEl = cards[index];
+        cardEl.classList.remove('failed');
+        cardEl.classList.add('active');
+
+        // Remove retry button and show resolving status
+        const rightContainer = cardEl.querySelector('.download-card-right');
+        if (rightContainer) {
+          rightContainer.innerHTML = `<span class="dl-status-compact" style="color: var(--blue)">Resolving…</span>`;
+        }
+
+        // Add progress bar if not present
+        let progressEl = cardEl.querySelector('.dl-progress-liquid');
+        if (!progressEl) {
+          const progressDiv = document.createElement('div');
+          progressDiv.className = 'dl-progress-liquid';
+          progressDiv.style.width = '0%';
+          progressDiv.innerHTML = '<div class="dl-wave-1"></div>';
+          cardEl.insertBefore(progressDiv, cardEl.firstChild);
+          requestAnimationFrame(() => { progressDiv.style.width = '15%'; });
+        } else {
+          progressEl.style.width = '15%';
+        }
+      }
+
       fetch('/api/retry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
