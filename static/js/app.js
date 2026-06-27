@@ -1616,7 +1616,7 @@
                 let hoverAttributes = '';
                 if (btnClass === 'primary-dl-btn') {
                   inlineStyle = `background: ${theme.btnBg}; border: 1px solid ${theme.btnBorder}; color: ${theme.btnColor}; box-shadow: 0 2px 10px ${theme.btnBg};`;
-                  hoverAttributes = `onmouseover="this.style.background='${theme.btnHoverBg}'; this.style.color='#ffffff'; this.style.box-shadow='0 4px 15px ${theme.btnBorder}'" onmouseout="this.style.background='${theme.btnBg}'; this.style.color='${theme.btnColor}'; this.style.box-shadow='0 2px 10px ${theme.btnBg}'"`;
+                  hoverAttributes = `onmouseover="this.style.background='${theme.btnHoverBg}'; this.style.color='#ffffff'; this.style.boxShadow='0 4px 15px ${theme.btnBorder}'" onmouseout="this.style.background='${theme.btnBg}'; this.style.color='${theme.btnColor}'; this.style.boxShadow='0 2px 10px ${theme.btnBg}'"`;
                 }
 
                 return `
