@@ -1947,7 +1947,12 @@
           rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
         }
       } else if (dl.state === 3) {
-        rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
+        if (dl.max_retries_reached) {
+          rightContent = `<span class="dl-status-compact" style="color: var(--text-dim); font-size: 0.75rem;">Max retries reached</span>`;
+        } else {
+          const attempt = (dl.retry_count || 0) + 1;
+          rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry (${attempt}/3)</button>`;
+        }
       } else if (dl.state === 1) {
         rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
       } else {
@@ -2124,7 +2129,12 @@
                 rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
               }
             } else if (dl.state === 3) {
-              rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
+              if (dl.max_retries_reached) {
+                rightContent = `<span class="dl-status-compact" style="color: var(--text-dim); font-size: 0.75rem;">Max retries reached</span>`;
+              } else {
+                const attempt = (dl.retry_count || 0) + 1;
+                rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry (${attempt}/3)</button>`;
+              }
             } else if (dl.state === 1) {
               rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
             } else {

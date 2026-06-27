@@ -227,6 +227,7 @@ def prewarm_dns():
 
 MAX_CONCURRENT = 2
 CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_RESOLVE_RETRIES = 3  # Maximum retry attempts for failed link resolutions
 
 TELEGRAM_VERBOSE_DEBUG = (
     os.getenv("TELEGRAM_VERBOSE_DEBUG", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -290,6 +291,7 @@ class VirtualDownloadCard:
         self.action_state = "normal"
         self.item_data = None
         self.url = ""
+        self.retry_count = 0  # Track how many times this card has been retried
 
     def set_method(self, method):
         self.method = method
@@ -324,7 +326,12 @@ class VirtualDownloadCard:
         self.progress = 0.0
         if reason:
             self.detail = reason
-        self.set_action("Retry")
+        # Only show Retry button if we haven't exceeded max retries
+        if self.retry_count >= MAX_RESOLVE_RETRIES:
+            self.detail = f"{reason} (max retries reached)" if reason else "Max retries reached"
+            self.set_action("")
+        else:
+            self.set_action("Retry")
 
     def mark_downloading(self):
         self.state = 1
@@ -354,7 +361,9 @@ class VirtualDownloadCard:
             "action_text": self.action_text,
             "action_state": self.action_state,
             "resolved_url": self.url,
-            "size": size_str
+            "size": size_str,
+            "retry_count": self.retry_count,
+            "max_retries_reached": self.retry_count >= MAX_RESOLVE_RETRIES,
         }
 
 
@@ -553,6 +562,11 @@ class DownloaderBackend:
                     # ── Not a valid link ──
                     if not ds_url or "driveseed.org" not in ds_url:
                         card.filename = name or f"Link {i + 1}"
+                        card.item_data = {
+                            "source_link": source_link,
+                            "source_index": i,
+                            "source_name_hint": name,
+                        }
                         card.mark_failed("Not a driveseed link")
                         with self._lock:
                             self._fail_count += 1
@@ -584,10 +598,12 @@ class DownloaderBackend:
 
                 except Exception as e:
                     orig_link = links[i] if i < len(links) else None
-                    card.filename = (orig_link.get("name") if orig_link else None) or f"Failed link {i + 1}"
+                    orig_name = (orig_link.get("name") if orig_link else None) or f"Failed link {i + 1}"
+                    card.filename = orig_name
                     card.item_data = {
                         "source_link": orig_link,
                         "source_index": i,
+                        "source_name_hint": orig_name,
                     }
                     card.mark_failed(str(e))
                     with self._lock:
@@ -896,8 +912,20 @@ class DownloaderBackend:
         if idx >= len(self.cards):
             return
         card = self.cards[idx]
+        
+        # Enforce max retry limit
+        if card.retry_count >= MAX_RESOLVE_RETRIES:
+            card.mark_failed("Max retries reached")
+            return
+        
+        # Decrement fail_count since we're transitioning from failed to retrying
+        if card.state == 3:
+            with self._lock:
+                self._fail_count = max(0, self._fail_count - 1)
+        
+        card.retry_count += 1
         card.mark_pending()
-        card.set_status("Re-resolving…")
+        card.set_status(f"Re-resolving… (attempt {card.retry_count}/{MAX_RESOLVE_RETRIES})")
         card.set_progress(0.15)
         
         def _task():
@@ -3749,7 +3777,6 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 self.send_json({"error": str(e)}, 500)
             return
 
-        # 3. Retry individual failed card
         if parsed.path == '/api/retry':
             try:
                 data = json.loads(body)
@@ -3765,32 +3792,51 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": "Card has no metadata item data"}, 400)
                     return
 
-                card.mark_pending()
-                
+                # Enforce max retry limit
+                if card.retry_count >= MAX_RESOLVE_RETRIES:
+                    card.mark_failed("Max retries reached")
+                    self.send_json({"error": "Max retries reached", "retry_count": card.retry_count}, 429)
+                    return
+
                 # Log the retry event
                 uid = DOWNLOAD_MGR.client_id if DOWNLOAD_MGR.client_id else "anonymous"
                 active_title = getattr(DOWNLOAD_MGR, 'active_title', 'Direct URL Input')
                 clean_title = clean_log_title(active_title)
                 fname = card.filename
-                dl_url = item.get("download_url", "")
                 method = item.get("method", "")
                 
                 event_msg = (
-                    f"👤 {uid:<10} | 🔄 RETRY     | \"{clean_title}\"\n"
-                    f"├─► Episode: \"{fname}\"\n"
-                    f"└─► Method: \"{method}\""
+                    f"\ud83d\udc64 {uid:<10} | \ud83d\udd04 RETRY {card.retry_count + 1}/{MAX_RESOLVE_RETRIES} | \"{clean_title}\"\n"
+                    f"\u251c\u2500\u25ba Episode: \"{fname}\"\n"
+                    f"\u2514\u2500\u25ba Method: \"{method}\""
                 )
                 log_instant_event(event_msg)
 
                 if item.get("method") == "TELEGRAM":
+                    # Decrement fail_count + increment retry_count here (telegram path manages itself)
+                    if card.state == 3:
+                        with DOWNLOAD_MGR._lock:
+                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                    card.retry_count += 1
+                    card.mark_pending()
                     DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
                 elif item.get("download_url"):
+                    # Decrement fail_count + increment retry_count here (download worker manages itself)
+                    if card.state == 3:
+                        with DOWNLOAD_MGR._lock:
+                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                    card.retry_count += 1
+                    card.mark_pending()
                     DOWNLOAD_MGR.download_queue.put((idx, item))
                     threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
                 elif item.get("source_link"):
+                    # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
                     DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
+                else:
+                    # No actionable data — mark as permanently failed
+                    card.mark_failed("No source link available for retry")
 
-                self.send_json({"status": "success"})
+                self.send_json({"status": "success", "retry_count": card.retry_count})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
@@ -3798,23 +3844,38 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         # 4. Retry all failed cards concurrently
         if parsed.path == '/api/retry-all':
             retried = 0
+            skipped = 0
+            needs_download_worker = False
             for idx, card in enumerate(DOWNLOAD_MGR.cards):
                 if card.state == 3:  # Failed state
                     item = card.item_data
                     if not item:
                         continue
-                    card.mark_pending()
+                    # Skip cards that have exhausted their retries
+                    if card.retry_count >= MAX_RESOLVE_RETRIES:
+                        skipped += 1
+                        continue
                     retried += 1
                     if item.get("method") == "TELEGRAM":
+                        with DOWNLOAD_MGR._lock:
+                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                        card.retry_count += 1
+                        card.mark_pending()
                         DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
                     elif item.get("download_url"):
+                        with DOWNLOAD_MGR._lock:
+                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                        card.retry_count += 1
+                        card.mark_pending()
                         DOWNLOAD_MGR.download_queue.put((idx, item))
+                        needs_download_worker = True
                     elif item.get("source_link"):
+                        # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
                         DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
             
-            if retried > 0:
+            if needs_download_worker:
                 threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
-            self.send_json({"status": "success", "retried": retried})
+            self.send_json({"status": "success", "retried": retried, "skipped_max_retries": skipped})
             return
 
         self.send_response(404)
