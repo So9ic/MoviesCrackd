@@ -795,6 +795,8 @@
       gap: 10px;
       min-width: 0;
       flex: 1;
+      position: relative;
+      z-index: 2;
     }
 
     .dl-index {
@@ -833,6 +835,54 @@
       align-items: center;
       gap: 10px;
       flex-shrink: 0;
+      position: relative;
+      z-index: 2;
+    }
+
+    /* Premium liquid progress bar background styling */
+    .dl-progress-liquid {
+      position: absolute;
+      top: 0;
+      left: 0;
+      height: 100%;
+      background: linear-gradient(90deg, #059669 0%, #00c853 100%); /* Thick vibrant solid green gradient */
+      z-index: 1;
+      transition: width 1.2s cubic-bezier(0.1, 0.8, 0.25, 1); /* super smooth, slow ease-out transition */
+    }
+
+    .dl-progress-liquid.dl-done-fade {
+      width: 100% !important;
+      opacity: 0;
+      pointer-events: none;
+      transition: width 0.4s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 0.6s ease-in-out 0.4s;
+    }
+
+    /* Wave caps on the leading edge (rotated liquid wave technique) */
+    .dl-wave-1 {
+      position: absolute;
+      top: 50%;
+      right: -38px; /* centered on the rightmost edge */
+      width: 76px;
+      height: 76px;
+      margin-top: -38px; /* center vertically */
+      border-radius: 38% 43% 40% 45%;
+      transform-origin: 50% 50%;
+      background-color: #00c853; /* matches the bright solid green */
+      animation: waveRotate 5s linear infinite;
+      z-index: 2;
+    }
+
+    .dl-progress-liquid.dl-downloading {
+      background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%); /* Thick vibrant solid blue gradient */
+    }
+    
+    .dl-progress-liquid.dl-downloading .dl-wave-1 {
+      background-color: #3b82f6; /* matches the bright solid blue */
+    }
+
+    @keyframes waveRotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
     }
 
     .dl-status-compact {
@@ -848,6 +898,11 @@
     @keyframes resolvePulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.4; }
+    }
+
+    @keyframes dlBtnEntry {
+      0% { opacity: 0; transform: scale(0.92) translateY(4px); }
+      100% { opacity: 1; transform: scale(1) translateY(0); }
     }
 
     .dl-download-btn {
@@ -867,6 +922,7 @@
       text-decoration: none;
       box-shadow: 0 2px 12px rgba(16, 185, 129, 0.25);
       white-space: nowrap;
+      animation: dlBtnEntry 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 
     .dl-download-btn:hover {
@@ -884,6 +940,7 @@
       transition: all 0.25s;
       border: none;
       cursor: pointer;
+      animation: dlBtnEntry 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 
     .dl-download-btn-partitioned:hover {

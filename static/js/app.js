@@ -8,6 +8,7 @@
     let allFetchedResults = [];
     let lastSearchQuery = '';
     let trendingMoviesList = [];
+    let cardProgressCreep = {};
 
     function getOrCreateClientId() {
       let id = localStorage.getItem('moviescrackd_client_id');
@@ -1919,6 +1920,75 @@
       }
     });
 
+    function renderDownloadCard(dl) {
+      let statusClass = '';
+      if (dl.state === 2) statusClass = 'done';
+      if (dl.state === 3) statusClass = 'failed';
+      if (dl.state === 1) statusClass = 'active';
+
+      const methodClass = (dl.method || '').toLowerCase();
+
+      let rightContent = '';
+      if (dl.resolved_url) {
+        if (dl.size) {
+          rightContent = `
+            <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
+              <span class="dl-btn-left">☁ Download to Device</span>
+              <span class="dl-btn-right">(${dl.size})</span>
+            </a>
+          `;
+        } else {
+          rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
+        }
+      } else if (dl.state === 3) {
+        rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
+      } else if (dl.state === 1) {
+        rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
+      } else {
+        rightContent = '';
+      }
+
+      let displayedProgress = dl.progress;
+      if (dl.state === 0) {
+        const cardId = dl.index;
+        if (cardProgressCreep[cardId] === undefined || dl.progress > cardProgressCreep[cardId]) {
+          cardProgressCreep[cardId] = dl.progress;
+        } else {
+          let cap = 0.95; // Capped at 95% absolute max before completion
+          if (dl.progress <= 0.15) cap = 0.35;
+          else if (dl.progress <= 0.4) cap = 0.75;
+          
+          if (cardProgressCreep[cardId] < cap) {
+            cardProgressCreep[cardId] += 0.005; // uniform creep speed
+          }
+        }
+        displayedProgress = cardProgressCreep[cardId];
+      } else {
+        delete cardProgressCreep[dl.index];
+      }
+
+      // Render with 0% width initially, and store the target width in data-target-width to animate it
+      const liquidProgress = (dl.state === 0 || dl.state === 1) 
+        ? `<div class="dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}" style="width: 0%;" data-target-width="${displayedProgress * 100}">
+             <div class="dl-wave-1"></div>
+           </div>` 
+        : '';
+
+      return `
+        <div class="download-card ${statusClass}">
+          ${liquidProgress}
+          <div class="download-card-left">
+            <span class="dl-index">#${dl.index}</span>
+            <span class="dl-filename" title="${dl.filename}">${dl.filename}</span>
+            ${dl.method ? `<span class="method-badge ${methodClass}">${dl.method}</span>` : ''}
+          </div>
+          <div class="download-card-right">
+            ${rightContent}
+          </div>
+        </div>
+      `;
+    }
+
     // Polling Downloads status
     function pollDownloads() {
       if (activeTab !== 'direct') return; // only poll active view
@@ -1940,20 +2010,103 @@
           isResolvingNewDownload = false;
 
           let hasFailed = false;
-          list.innerHTML = data.downloads.map(dl => {
-            if (dl.state === 3) hasFailed = true; // State Failed
+          const currentCards = list.querySelectorAll('.download-card');
+          
+          // If counts don't match, do a full render
+          if (currentCards.length !== data.downloads.length) {
+            list.innerHTML = data.downloads.map(dl => {
+              if (dl.state === 3) hasFailed = true;
+              return renderDownloadCard(dl);
+            }).join('');
             
+            // Trigger the smooth slide transition from 0% to the target width!
+            requestAnimationFrame(() => {
+              list.querySelectorAll('.dl-progress-liquid').forEach(bar => {
+                const targetWidth = bar.getAttribute('data-target-width');
+                if (targetWidth) {
+                  bar.style.width = `${targetWidth}%`;
+                }
+              });
+            });
+            return;
+          }
+
+          // Otherwise, update existing elements in-place to preserve CSS transitions!
+          data.downloads.forEach((dl, i) => {
+            if (dl.state === 3) hasFailed = true;
+            const cardEl = currentCards[i];
+            
+            // 1. Update status classes
             let statusClass = '';
             if (dl.state === 2) statusClass = 'done';
             if (dl.state === 3) statusClass = 'failed';
             if (dl.state === 1) statusClass = 'active';
 
-            const methodClass = (dl.method || '').toLowerCase();
+            cardEl.classList.remove('done', 'failed', 'active');
+            if (statusClass) cardEl.classList.add(statusClass);
 
-            // Right side content depends on state
+            // 2. Update progress width in-place
+            let progressEl = cardEl.querySelector('.dl-progress-liquid');
+            if (dl.state === 0 || dl.state === 1) {
+              let displayedProgress = dl.progress;
+              if (dl.state === 0) {
+                const cardId = dl.index;
+                if (cardProgressCreep[cardId] === undefined || dl.progress > cardProgressCreep[cardId]) {
+                  cardProgressCreep[cardId] = dl.progress;
+                } else {
+                  let cap = 0.95; // Capped at 95% absolute max before completion
+                  if (dl.progress <= 0.15) cap = 0.35;
+                  else if (dl.progress <= 0.4) cap = 0.75;
+                  
+                  if (cardProgressCreep[cardId] < cap) {
+                    cardProgressCreep[cardId] += 0.005; // uniform creep speed
+                  }
+                }
+                displayedProgress = cardProgressCreep[cardId];
+              } else {
+                delete cardProgressCreep[dl.index];
+              }
+              
+              if (!progressEl) {
+                // If it transitioned from non-resolving to resolving, create it
+                const progressDiv = document.createElement('div');
+                progressDiv.className = `dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}`;
+                progressDiv.style.width = '0%';
+                progressDiv.innerHTML = '<div class="dl-wave-1"></div>';
+                cardEl.insertBefore(progressDiv, cardEl.firstChild);
+                progressEl = progressDiv;
+                // Allow browser to register layout before setting width to trigger transition
+                requestAnimationFrame(() => {
+                  progressEl.style.width = `${displayedProgress * 100}%`;
+                });
+              } else {
+                progressEl.style.width = `${displayedProgress * 100}%`;
+                if (dl.state === 1) {
+                  progressEl.classList.add('dl-downloading');
+                } else {
+                  progressEl.classList.remove('dl-downloading');
+                }
+              }
+            } else if (progressEl) {
+              // If it transitioned to done (state 2), fade it out!
+              if (dl.state === 2) {
+                progressEl.classList.add('dl-done-fade');
+                progressEl.style.width = '100%';
+                const targetBar = progressEl;
+                setTimeout(() => {
+                  if (targetBar.parentNode) {
+                    targetBar.remove();
+                  }
+                }, 1000);
+              } else {
+                progressEl.remove();
+              }
+            }
+
+            // 3. Update right side content if changed
+            const rightContainer = cardEl.querySelector('.download-card-right');
             let rightContent = '';
             if (dl.resolved_url) {
-              // Completed with resolved URL — show download button
               if (dl.size) {
                 rightContent = `
                   <a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn-partitioned">
@@ -1965,36 +2118,42 @@
                 rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
               }
             } else if (dl.state === 3) {
-              // Failed — show retry button (index is 1-based display, convert to 0-based array index)
               rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
             } else if (dl.state === 1) {
-              // Actively downloading — show compact status
               rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
-            } else if (dl.state === 0 && dl.status !== 'Pending') {
-              // Actively resolving — show status with spinner
-              rightContent = `<span class="dl-status-compact dl-resolving" style="color: var(--accent)">${dl.status}</span>`;
             } else {
-              // Queued or other — show status text
-              rightContent = `<span class="dl-status-compact" style="color: var(--text-sub)">${dl.status}</span>`;
+              rightContent = '';
+            }
+            
+            if (rightContainer.innerHTML.trim() !== rightContent.trim()) {
+              rightContainer.innerHTML = rightContent;
             }
 
-            // Only show progress bar if not yet completed
-            const progressBar = (dl.state !== 2) ? `<div class="dl-progress-mini" style="width: ${dl.progress * 100}%"></div>` : '';
+            // 4. Update method badge if it changed/appeared
+            const leftContainer = cardEl.querySelector('.download-card-left');
+            const methodClass = (dl.method || '').toLowerCase();
+            const badgeEl = leftContainer.querySelector('.method-badge');
+            if (dl.method) {
+              if (!badgeEl) {
+                const newBadge = document.createElement('span');
+                newBadge.className = `method-badge ${methodClass}`;
+                newBadge.innerText = dl.method;
+                leftContainer.appendChild(newBadge);
+              } else if (badgeEl.innerText !== dl.method) {
+                badgeEl.className = `method-badge ${methodClass}`;
+                badgeEl.innerText = dl.method;
+              }
+            } else if (badgeEl) {
+              badgeEl.remove();
+            }
 
-            return `
-              <div class="download-card ${statusClass}">
-                <div class="download-card-left">
-                  <span class="dl-index">#${dl.index}</span>
-                  <span class="dl-filename" title="${dl.filename}">${dl.filename}</span>
-                  ${dl.method ? `<span class="method-badge ${methodClass}">${dl.method}</span>` : ''}
-                </div>
-                <div class="download-card-right">
-                  ${rightContent}
-                </div>
-                ${progressBar}
-              </div>
-            `;
-          }).join('');
+            // 5. Update filename if it changed (e.g. from placeholder "Resolving..." to actual filename)
+            const filenameEl = leftContainer.querySelector('.dl-filename');
+            if (filenameEl && filenameEl.innerText !== dl.filename) {
+              filenameEl.innerText = dl.filename;
+              filenameEl.title = dl.filename;
+            }
+          });
 
           // Show retry all failures button if failures exist
           document.getElementById('retry-failed-btn').style.display = hasFailed ? 'block' : 'none';

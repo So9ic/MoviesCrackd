@@ -475,6 +475,7 @@ class DownloaderBackend:
             for i in range(total):
                 card = VirtualDownloadCard(i + 1, "Resolving…", "…")
                 card.set_status("Resolving…")
+                card.set_progress(0.15)
                 self.cards.append(card)
 
             existing = set()
@@ -494,6 +495,7 @@ class DownloaderBackend:
                 try:
                     # Phase 1: Shortener bypass → get name + driveseed URL
                     card.set_status("Bypassing shortener…")
+                    card.set_progress(0.4)
                     _, name, ds_url = resolve_link(i, link, session=SESSION)
                     source_link = dict(link) if isinstance(link, dict) else None
 
@@ -558,6 +560,7 @@ class DownloaderBackend:
 
                     # Phase 2: Driveseed resolution → get direct download URL + size
                     card.set_status("Resolving driveseed…")
+                    card.set_progress(0.8)
 
                     meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
                     meta_size = raw_meta_size or expected_size
@@ -895,9 +898,12 @@ class DownloaderBackend:
         card = self.cards[idx]
         card.mark_pending()
         card.set_status("Re-resolving…")
+        card.set_progress(0.15)
         
         def _task():
             try:
+                card.set_status("Bypassing shortener…")
+                card.set_progress(0.4)
                 _, name, ds_url = resolve_link(idx, link, session=SESSION)
                 source_link = dict(link) if isinstance(link, dict) else None
                 size_hint = parse_size_hint_bytes(name)
@@ -939,6 +945,8 @@ class DownloaderBackend:
                 elif not ds_url or "driveseed.org" not in ds_url:
                     raise ValueError("Not a driveseed link")
                 else:
+                    card.set_status("Resolving driveseed…")
+                    card.set_progress(0.8)
                     meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
                     meta_size = raw_meta_size or expected_size
                     dl_url, fname, method = get_driveseed_download_url(ds_url)
