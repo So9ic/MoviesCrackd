@@ -841,6 +841,15 @@
       white-space: nowrap;
     }
 
+    .dl-resolving {
+      animation: resolvePulse 1.2s ease-in-out infinite;
+    }
+
+    @keyframes resolvePulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
     .dl-download-btn {
       background: linear-gradient(135deg, var(--emerald), #059669);
       color: #ffffff;

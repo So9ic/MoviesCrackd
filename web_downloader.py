@@ -484,139 +484,164 @@ class DownloaderBackend:
             workers_started = [0]
             workers_lock = threading.Lock()
 
-            def _fused_resolve(i, link):
-                _, name, ds_url = resolve_link(i, link, session=SESSION)
-                source_link = dict(link) if isinstance(link, dict) else None
-                size_hint = parse_size_hint_bytes(name)
-                origin_url = link.get("url", "") if isinstance(link, dict) else ""
-                origin_meta_size = None
-                if "driveseed.org" in origin_url:
-                    _, origin_meta_size = get_driveseed_file_metadata(origin_url)
+            def _resolve_single_card(i, link):
+                """
+                Fire-and-forget worker: independently resolves one link and
+                updates its card immediately — no futures/as_completed blocking.
+                Each card appears on the UI as soon as it finishes resolving.
+                """
+                card = self.cards[i]
+                try:
+                    # Phase 1: Shortener bypass → get name + driveseed URL
+                    card.set_status("Bypassing shortener…")
+                    _, name, ds_url = resolve_link(i, link, session=SESSION)
+                    source_link = dict(link) if isinstance(link, dict) else None
 
-                expected_size = origin_meta_size or size_hint
+                    # Show filename on card immediately (visible in next poll)
+                    if name:
+                        card.filename = name
 
-                if ds_url and "tgseed.link" in ds_url:
-                    fname = name or f"Link {i + 1}"
-                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
-                    return i, {
-                        "filename": fname,
-                        "download_url": ds_url,
-                        "method": "TELEGRAM",
-                        "target_dir": self.output_dir,
-                        "expected_size_bytes": expected_size,
-                        "source_link": source_link,
-                        "source_index": i,
-                        "source_name_hint": name,
-                        "source_driveseed_url": None,
-                    }
+                    size_hint = parse_size_hint_bytes(name)
+                    origin_url = link.get("url", "") if isinstance(link, dict) else ""
+                    origin_meta_size = None
+                    if "driveseed.org" in origin_url:
+                        try:
+                            _, origin_meta_size = get_driveseed_file_metadata(origin_url)
+                        except Exception:
+                            pass
 
-                if ds_url and ".r2.dev/" in ds_url:
-                    fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{i + 1}"
-                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
-                    return i, {
-                        "filename": fname,
-                        "download_url": ds_url,
-                        "method": "CLOUD",
-                        "target_dir": self.output_dir,
-                        "expected_size_bytes": expected_size,
-                        "source_link": source_link,
-                        "source_index": i,
-                        "source_name_hint": name,
-                        "source_driveseed_url": None,
-                    }
+                    expected_size = origin_meta_size or size_hint
 
-                if not ds_url or "driveseed.org" not in ds_url:
-                    return i, {
-                        "filename": name or f"Link {i + 1}",
-                        "download_url": None,
-                        "method": "",
-                        "error": "Not a driveseed link",
-                    }
-
-                meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
-                meta_size = raw_meta_size or expected_size
-                dl_url, fname, method = get_driveseed_download_url(ds_url)
-                if not fname:
-                    fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{i + 1}"
-                fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
-                
-                return i, {
-                    "filename": fname,
-                    "download_url": dl_url,
-                    "method": method,
-                    "target_dir": self.output_dir,
-                    "expected_size_bytes": meta_size,
-                    "source_link": source_link,
-                    "source_index": i,
-                    "source_name_hint": name,
-                    "source_driveseed_url": ds_url,
-                }
-
-            done_count = 0
-            with ThreadPoolExecutor(max_workers=10) as pool:
-                futures = {pool.submit(_fused_resolve, i, lnk): i for i, lnk in enumerate(links)}
-                for future in as_completed(futures):
-                    idx = futures[future]
-                    try:
-                        idx, item = future.result()
-                    except Exception as e:
-                        orig_link = links[idx] if idx < len(links) else None
+                    # ── Telegram link ──
+                    if ds_url and "tgseed.link" in ds_url:
+                        fname = name or f"Link {i + 1}"
+                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                         item = {
-                            "filename": orig_link.get("name") if orig_link else f"Failed link {idx + 1}",
-                            "download_url": None,
-                            "method": "",
-                            "error": str(e),
-                            "source_link": orig_link,
-                            "source_index": idx,
+                            "filename": fname,
+                            "download_url": ds_url,
+                            "method": "TELEGRAM",
+                            "target_dir": self.output_dir,
+                            "expected_size_bytes": expected_size,
+                            "source_link": source_link,
+                            "source_index": i,
+                            "source_name_hint": name,
+                            "source_driveseed_url": None,
                         }
+                        self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                        return
 
-                    done_count += 1
-                    
-                    if item.get("download_url"):
-                        fname = item["filename"]
-                        card = self.cards[idx]
-                        card.filename = fname
-                        card.set_method(item.get("method", ""))
-                        card.item_data = item
-                        card.url = item["download_url"]
+                    # ── Direct Cloud R2 link ──
+                    if ds_url and ".r2.dev/" in ds_url:
+                        fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{i + 1}"
+                        fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+                        item = {
+                            "filename": fname,
+                            "download_url": ds_url,
+                            "method": "CLOUD",
+                            "target_dir": self.output_dir,
+                            "expected_size_bytes": expected_size,
+                            "source_link": source_link,
+                            "source_index": i,
+                            "source_name_hint": name,
+                            "source_driveseed_url": None,
+                        }
+                        self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                        return
 
-
-                        if fname in existing:
-                            card.set_detail("Already downloaded")
-                            card.mark_done()
-                            with self._lock:
-                                self._done_count += 1
-                        else:
-                            if item.get("method") == "TELEGRAM":
-                                card.set_status("Manual Telegram")
-                                exp = item.get("expected_size_bytes")
-                                card.set_detail(f"Click Download to open Telegram Desktop. Expected: {fmt_bytes(exp)}" if exp else "Click Download to open Telegram Desktop.")
-                                card.set_action("Download", lambda index=idx: self.start_telegram_manual(index))
-                            else:
-                                if self.cloud_mode:
-                                    card.status = "✓ Ready"
-                                    card.state = 2
-                                    card.progress = 1.0
-                                    card.detail = "Direct link resolved! Click 'Download to Device' below."
-                                    with self._lock:
-                                        self._done_count += 1
-                                else:
-                                    card.set_status("Queued")
-                                    self.download_queue.put((idx, item))
-                                    with workers_lock:
-                                        while workers_started[0] < MAX_CONCURRENT:
-                                            workers_started[0] += 1
-                                            threading.Thread(target=self._download_worker, daemon=True).start()
-                    else:
-                        card = self.cards[idx]
-                        card.filename = item["filename"]
-                        card.set_method(item.get("method", ""))
-                        card.mark_failed(item.get("error", "Could not resolve"))
+                    # ── Not a valid link ──
+                    if not ds_url or "driveseed.org" not in ds_url:
+                        card.filename = name or f"Link {i + 1}"
+                        card.mark_failed("Not a driveseed link")
                         with self._lock:
                             self._fail_count += 1
+                        return
+
+                    # Phase 2: Driveseed resolution → get direct download URL + size
+                    card.set_status("Resolving driveseed…")
+
+                    meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
+                    meta_size = raw_meta_size or expected_size
+                    dl_url, fname, method = get_driveseed_download_url(ds_url)
+                    if not fname:
+                        fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{i + 1}"
+                    fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+
+                    item = {
+                        "filename": fname,
+                        "download_url": dl_url,
+                        "method": method,
+                        "target_dir": self.output_dir,
+                        "expected_size_bytes": meta_size,
+                        "source_link": source_link,
+                        "source_index": i,
+                        "source_name_hint": name,
+                        "source_driveseed_url": ds_url,
+                    }
+                    self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+
+                except Exception as e:
+                    orig_link = links[i] if i < len(links) else None
+                    card.filename = (orig_link.get("name") if orig_link else None) or f"Failed link {i + 1}"
+                    card.item_data = {
+                        "source_link": orig_link,
+                        "source_index": i,
+                    }
+                    card.mark_failed(str(e))
+                    with self._lock:
+                        self._fail_count += 1
+
+            # Fire all resolve threads independently (semaphore in skip_shortener
+            # limits actual shortener concurrency to 3; driveseed calls are unthrottled)
+            for i, lnk in enumerate(links):
+                threading.Thread(
+                    target=_resolve_single_card,
+                    args=(i, lnk),
+                    daemon=True
+                ).start()
 
         except Exception as e:
             print(f"[-] Resolve error: {e}", flush=True)
+
+    def _finalize_card(self, card, idx, item, existing, workers_started, workers_lock):
+        """
+        Atomically finalize a resolved card: set metadata, url, and decide
+        whether to queue for download. Called from independent worker threads.
+        Sets item_data BEFORE url to prevent size flickering on client polls.
+        """
+        fname = item["filename"]
+        card.filename = fname
+        card.set_method(item.get("method", ""))
+        # IMPORTANT: set item_data first so to_json() sees the size immediately
+        card.item_data = item
+        card.url = item["download_url"]
+
+        if fname in existing:
+            card.set_detail("Already downloaded")
+            card.mark_done()
+            with self._lock:
+                self._done_count += 1
+        elif item.get("method") == "TELEGRAM":
+            card.set_status("Manual Telegram")
+            exp = item.get("expected_size_bytes")
+            card.set_detail(
+                f"Click Download to open Telegram Desktop. Expected: {fmt_bytes(exp)}"
+                if exp else "Click Download to open Telegram Desktop."
+            )
+            card.set_action("Download", lambda index=idx: self.start_telegram_manual(index))
+        elif self.cloud_mode:
+            card.status = "✓ Ready"
+            card.state = 2
+            card.progress = 1.0
+            card.detail = "Direct link resolved! Click 'Download to Device' below."
+            with self._lock:
+                self._done_count += 1
+        else:
+            card.set_status("Queued")
+            self.download_queue.put((idx, item))
+            with workers_lock:
+                while workers_started[0] < MAX_CONCURRENT:
+                    workers_started[0] += 1
+                    threading.Thread(target=self._download_worker, daemon=True).start()
 
     def _resolve_single_driveseed(self, url, idx):
         with self._lock:

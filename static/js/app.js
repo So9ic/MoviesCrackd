@@ -1965,11 +1965,14 @@
                 rightContent = `<a href="${dl.resolved_url}" download="${dl.filename}" target="_blank" class="dl-download-btn">☁ Download to Device</a>`;
               }
             } else if (dl.state === 3) {
-              // Failed — show retry button
-              rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index})">Retry</button>`;
+              // Failed — show retry button (index is 1-based display, convert to 0-based array index)
+              rightContent = `<button class="dl-retry-btn" onclick="retryDownload(${dl.index - 1})">Retry</button>`;
             } else if (dl.state === 1) {
               // Actively downloading — show compact status
               rightContent = `<span class="dl-status-compact" style="color: var(--blue)">${dl.status}</span>`;
+            } else if (dl.state === 0 && dl.status !== 'Pending') {
+              // Actively resolving — show status with spinner
+              rightContent = `<span class="dl-status-compact dl-resolving" style="color: var(--accent)">${dl.status}</span>`;
             } else {
               // Queued or other — show status text
               rightContent = `<span class="dl-status-compact" style="color: var(--text-sub)">${dl.status}</span>`;
