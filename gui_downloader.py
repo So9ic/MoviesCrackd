@@ -2162,6 +2162,24 @@ class DownloaderApp(ctk.CTk):
             self.after(0, lambda: self._create_placeholder_cards(total))
             time.sleep(0.1)  # let UI render
 
+            # Dynamic DNS pre-warming for scraped hosts
+            scraped_hosts = set()
+            for lnk in links:
+                try:
+                    h = urlparse(lnk.get("url", "")).netloc
+                    if h:
+                        scraped_hosts.add(h)
+                except Exception:
+                    pass
+            if scraped_hosts:
+                def _resolve_scraped_hosts():
+                    for host in scraped_hosts:
+                        try:
+                            socket.getaddrinfo(host, 443)
+                        except Exception:
+                            pass
+                threading.Thread(target=_resolve_scraped_hosts, daemon=True).start()
+
             # Check which files already exist
             existing = set()
             if os.path.isdir(self.output_dir):

@@ -80,7 +80,7 @@ def extract_cookie_call(html: str) -> tuple:
     return None, None
 
 
-def do_post_step(session, html, step_num, referer, verbose=True):
+def do_post_step(session, html, step_num, referer, verbose=True, default_domain='tech.unblockedgames.world'):
     """Submit a POST form found in the HTML, return the response."""
     forms = extract_forms(html)
     if not forms:
@@ -95,9 +95,9 @@ def do_post_step(session, html, step_num, referer, verbose=True):
         print(f"    Fields: {list(post_data.keys())}")
 
     try:
-        shortener_domain = urlparse(referer).netloc or 'tech.unblockedgames.world'
+        shortener_domain = urlparse(referer).netloc or default_domain
     except Exception:
-        shortener_domain = 'tech.unblockedgames.world'
+        shortener_domain = default_domain
 
     resp = session.post(
         post_url,
@@ -120,7 +120,7 @@ def do_post_step(session, html, step_num, referer, verbose=True):
 
 def bypass_shortener(url: str, verbose: bool = True, session: requests.Session = None) -> str:
     """
-    Bypass the tech.unblockedgames.world shortener and return the final URL.
+    Bypass the URL shortener and return the final URL.
     Accepts an optional pre-configured session for connection reuse.
     """
     if session is None:
@@ -134,6 +134,13 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
         })
+
+    # Get shortener domain dynamically from the input URL
+    try:
+        parsed_url = urlparse(url)
+        initial_domain = parsed_url.netloc or 'health.jkssbworld.in'
+    except Exception:
+        initial_domain = 'health.jkssbworld.in'
 
     # ── Step 1: GET the ?sid= landing page ──
     if verbose:
@@ -163,7 +170,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
             break
 
         resp, current_html = do_post_step(
-            session, current_html, step, current_url, verbose
+            session, current_html, step, current_url, verbose, default_domain=initial_domain
         )
         if resp is None:
             break
@@ -191,9 +198,9 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
         print(f"    Value: {cookie_value[:80]}...")
 
     try:
-        shortener_domain = urlparse(current_url).netloc or 'tech.unblockedgames.world'
+        shortener_domain = urlparse(current_url).netloc or initial_domain
     except Exception:
-        shortener_domain = 'tech.unblockedgames.world'
+        shortener_domain = initial_domain
 
     # ── Set the cookie ──
     session.cookies.set(
@@ -220,7 +227,8 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
     final_url = resp_final.url
 
     # If we're still on the shortener domain, try to find the real destination
-    if 'unblockedgames' in final_url:
+    final_domain_lower = urlparse(final_url).netloc.lower()
+    if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
         if verbose:
             print("    Still on shortener domain, looking for destination...")
 
@@ -234,11 +242,13 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
             m = re.search(pattern, resp_final.text, re.IGNORECASE)
             if m:
                 candidate = m.group(1)
-                if 'unblockedgames' not in candidate:
+                candidate_domain = urlparse(candidate).netloc.lower()
+                if shortener_domain.lower() not in candidate_domain and 'unblockedgames' not in candidate_domain:
                     final_url = candidate
                     break
 
-        if 'unblockedgames' in final_url:
+        final_domain_lower = urlparse(final_url).netloc.lower()
+        if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
             with open("/tmp/shortener_final_debug.html", "w") as f:
                 f.write(resp_final.text)
             if verbose:
@@ -255,7 +265,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         test_url = (
-            "https://tech.unblockedgames.world/?sid="
+            "https://health.jkssbworld.in/?sid="
             "a3Y4azk3STZ5RVphb1c0d0pkeDllbjluV0NSTDRXNWlOSmJZTDFBU1RwM3AwTEJSbHhsejZL"
             "cmNYQzFsVGV2QkxMUmpsdURZR3hQNEo5c2g2UHhoMWRBNmt2dWQzZWx3ZjU1dkhTT3FySFRy"
             "M3ZvbjdDaGRiL3dmZUZVR2FCY1JjZ0FEdjI3SnhnSGZYWDhHQ1NQU1lTZXE0TTluakt0SUE0"
