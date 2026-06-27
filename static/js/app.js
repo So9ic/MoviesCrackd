@@ -1840,6 +1840,7 @@
     function startDownload(url, optionTitle, buttonText) {
       url = decodeURIComponent(url);
       isResolvingNewDownload = true;
+      cardProgressCreep = {};
 
       // Clear the downloads list UI immediately with beautiful skeleton placeholders
       const list = document.getElementById('downloads-list');
