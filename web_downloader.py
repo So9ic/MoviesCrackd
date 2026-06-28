@@ -171,6 +171,7 @@ from direct_downloader import (
     HEADERS,
     get_driveseed_download_url,
     get_driveseed_file_metadata,
+    resolve_driveseed,
 )
 
 try:
@@ -216,6 +217,16 @@ DNS_DOMAINS = [
     "cloud.unblockedgames.world",
 ]
 
+# Import the shortener's last known domain for DNS pre-warming
+try:
+    from skip_shortener import LAST_WORKING_DOMAIN as _SHORTENER_DOMAIN
+    if _SHORTENER_DOMAIN and _SHORTENER_DOMAIN not in DNS_DOMAINS:
+        DNS_DOMAINS.append(_SHORTENER_DOMAIN)
+except ImportError:
+    pass
+
+_dns_ready = threading.Event()
+
 def prewarm_dns():
     def _resolve(host):
         try:
@@ -224,10 +235,11 @@ def prewarm_dns():
             pass
     with ThreadPoolExecutor(max_workers=len(DNS_DOMAINS)) as pool:
         pool.map(_resolve, DNS_DOMAINS)
+    _dns_ready.set()
 
 MAX_CONCURRENT = 2
 CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
-MAX_AUTO_RETRIES = 3  # Automatic silent retry attempts before showing manual Retry button
+MAX_AUTO_RETRIES = 2  # Reduced from 3: show manual Retry button faster to save CPU on Render free tier
 
 TELEGRAM_VERBOSE_DEBUG = (
     os.getenv("TELEGRAM_VERBOSE_DEBUG", "1").strip().lower() not in ("0", "false", "no", "off")
@@ -470,6 +482,8 @@ class DownloaderBackend:
         # Do not clear the queue as it contains other clients' downloads!
 
         threading.Thread(target=prewarm_dns, daemon=True).start()
+        # Wait briefly for DNS pre-warming so the first shortener call benefits
+        _dns_ready.wait(timeout=2.0)
         threading.Thread(target=self._resolve_pipeline, args=(url, state.client_id, state.generation), daemon=True).start()
 
     def _resolve_pipeline(self, url, client_id, generation):
@@ -626,15 +640,13 @@ class DownloaderBackend:
                             last_error = "Not a driveseed link"
                             continue  # Auto-retry
 
-                        # Phase 2: Driveseed resolution → get direct download URL + size
+                        # Phase 2: Driveseed resolution → unified single-fetch for metadata + download URL
                         card.set_status("Resolving driveseed…")
                         card.set_progress(0.8)
 
-                        meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
-                        meta_size = raw_meta_size or expected_size
-                        dl_url, fname, method = get_driveseed_download_url(ds_url)
-                        if not fname:
-                            fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{i + 1}"
+                        dl_url, ds_fname, ds_size, method = resolve_driveseed(ds_url)
+                        meta_size = ds_size or expected_size
+                        fname = ds_fname or name or os.path.basename(urlparse(dl_url).path) or f"download_{i + 1}"
                         fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
 
                         item = {
@@ -747,10 +759,9 @@ class DownloaderBackend:
                 state.cards.append(card)
 
         try:
-            meta_fname, meta_size = get_driveseed_file_metadata(url)
-            dl_url, fname, method = get_driveseed_download_url(url)
+            dl_url, fname, meta_size, method = resolve_driveseed(url)
             if not fname:
-                fname = meta_fname or os.path.basename(urlparse(dl_url).path) or "download_1"
+                fname = os.path.basename(urlparse(dl_url).path) or "download_1"
             fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
             
             item = {
@@ -1088,11 +1099,9 @@ class DownloaderBackend:
                 else:
                     card.set_status("Resolving driveseed…")
                     card.set_progress(0.8)
-                    meta_fname, raw_meta_size = get_driveseed_file_metadata(ds_url)
-                    meta_size = raw_meta_size or expected_size
-                    dl_url, fname, method = get_driveseed_download_url(ds_url)
-                    if not fname:
-                        fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{idx + 1}"
+                    dl_url, ds_fname, ds_size, method = resolve_driveseed(ds_url)
+                    meta_size = ds_size or expected_size
+                    fname = ds_fname or name or os.path.basename(urlparse(dl_url).path) or f"download_{idx + 1}"
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                     item = {
                         "client_id": state.client_id,

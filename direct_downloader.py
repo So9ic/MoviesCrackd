@@ -20,7 +20,9 @@ import os
 import re
 import sys
 import time
+import threading
 import requests
+from collections import OrderedDict
 from urllib.parse import urlparse, parse_qs, unquote, urljoin
 
 from env_loader import load_env_file
@@ -57,6 +59,52 @@ _adapter = requests.adapters.HTTPAdapter(pool_connections=20, pool_maxsize=20)
 SESSION.mount('https://', _adapter)
 SESSION.mount('http://', _adapter)
 
+# Pre-compiled regex patterns
+_RE_JS_REDIRECT = re.compile(r'window\.location\.replace\(["\']([^"\']+)["\']\)')
+_RE_JS_LOCATION = re.compile(
+    r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
+    re.IGNORECASE
+)
+
+
+# ── Driveseed resolution cache (TTL-based LRU) ──────────────────────
+_DS_CACHE = OrderedDict()  # key: driveseed_path → (download_url, filename, size_bytes, method, timestamp)
+_DS_CACHE_LOCK = threading.Lock()
+_DS_CACHE_MAX = 200
+_DS_CACHE_TTL = 900  # 15 minutes
+
+
+def _ds_cache_key(url: str) -> str:
+    """Extract a stable cache key from a driveseed URL (the path part)."""
+    try:
+        parsed = urlparse(url)
+        return parsed.path.rstrip('/')
+    except Exception:
+        return url
+
+
+def _ds_cache_get(key: str):
+    """Return cached (download_url, filename, size_bytes, method) or None."""
+    with _DS_CACHE_LOCK:
+        entry = _DS_CACHE.get(key)
+        if entry is None:
+            return None
+        dl_url, fname, size, method, ts = entry
+        if time.time() - ts > _DS_CACHE_TTL:
+            _DS_CACHE.pop(key, None)
+            return None
+        _DS_CACHE.move_to_end(key)
+        return dl_url, fname, size, method
+
+
+def _ds_cache_set(key: str, dl_url: str, fname: str | None, size: int | None, method: str):
+    """Store a resolved driveseed result."""
+    with _DS_CACHE_LOCK:
+        _DS_CACHE[key] = (dl_url, fname, size, method, time.time())
+        _DS_CACHE.move_to_end(key)
+        while len(_DS_CACHE) > _DS_CACHE_MAX:
+            _DS_CACHE.popitem(last=False)
+
 
 def _follow_download_link(download_url: str) -> str | None:
     """Follow a video-leech/video-seed redirect to get the final download URL, using proxy fallbacks if needed."""
@@ -74,7 +122,7 @@ def _follow_download_link(download_url: str) -> str | None:
     html = ""
     final_url = download_url
     try:
-        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=15)
+        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=10)
         final_url = redirect_resp.url
         html = redirect_resp.text
     except Exception as e:
@@ -90,7 +138,7 @@ def _follow_download_link(download_url: str) -> str | None:
                     batch_episodes.WORKING_PROXY = p
                     proxies = {'http': f'http://{p}', 'https': f'http://{p}'}
                     try:
-                        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=15)
+                        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=10)
                         final_url = redirect_resp.url
                         html = redirect_resp.text
                     except Exception as e2:
@@ -113,17 +161,13 @@ def _follow_download_link(download_url: str) -> str | None:
                 return qs['url'][0]
 
         # Handle JS redirect: window.location.href = "/upload?url=..."
-        js_match = re.search(
-            r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
-            html,
-            re.IGNORECASE
-        )
+        js_match = _RE_JS_LOCATION.search(html)
         if js_match:
             relative_target = js_match.group(1)
             next_url = urljoin(final_url, relative_target)
             print(f"    [+] Following JS redirect to: {next_url}")
             # Fetch the target page using proxy/direct session
-            resp = SESSION.get(next_url, allow_redirects=True, proxies=proxies, timeout=15)
+            resp = SESSION.get(next_url, allow_redirects=True, proxies=proxies, timeout=10)
             final_url = resp.url
             html = resp.text
 
@@ -211,17 +255,25 @@ def _extract_filename_and_size(html: str) -> tuple[str | None, int | None]:
 
 
 def get_driveseed_file_metadata(driveseed_url: str, retries: int = 2) -> tuple[str | None, int | None]:
-    """Return (filename, size_bytes) parsed from a driveseed file page."""
+    """Return (filename, size_bytes) parsed from a driveseed file page.
+    Uses the unified cache when possible to avoid redundant fetches."""
+    # Check cache first
+    cache_key = _ds_cache_key(driveseed_url)
+    cached = _ds_cache_get(cache_key)
+    if cached:
+        _, fname, size, _ = cached
+        return fname, size
+
     last_error = None
 
     for attempt in range(1, retries + 2):
         try:
-            resp = SESSION.get(driveseed_url, timeout=30)
+            resp = SESSION.get(driveseed_url, timeout=12)
             resp.raise_for_status()
             html = resp.text
 
             # Handle /r?key=...&id=... pages → JS redirect to /file/XXX
-            js_redirect = re.search(r'window\.location\.replace\(["\']([^"\']+)["\']\)', html)
+            js_redirect = _RE_JS_REDIRECT.search(html)
             if js_redirect:
                 redirect_path = js_redirect.group(1)
                 if redirect_path.startswith('/'):
@@ -229,7 +281,7 @@ def get_driveseed_file_metadata(driveseed_url: str, retries: int = 2) -> tuple[s
                     file_url = f"{p.scheme}://{p.netloc}{redirect_path}"
                 else:
                     file_url = redirect_path
-                resp = SESSION.get(file_url, timeout=30)
+                resp = SESSION.get(file_url, timeout=12)
                 resp.raise_for_status()
                 html = resp.text
 
@@ -254,16 +306,23 @@ def get_driveseed_download_url(driveseed_url: str, retries: int = 2) -> tuple[st
     Tries Instant Download V2 first. If it fails, falls back to
     Instant Download (V1). Retries on network errors.
     """
+    # Check cache first
+    cache_key = _ds_cache_key(driveseed_url)
+    cached = _ds_cache_get(cache_key)
+    if cached:
+        dl_url, fname, _, method = cached
+        return dl_url, fname, method
+
     last_error = None
 
     for attempt in range(1, retries + 2):  # retries + 1 attempts total
         try:
-            resp = SESSION.get(driveseed_url, timeout=30)
+            resp = SESSION.get(driveseed_url, timeout=12)
             resp.raise_for_status()
             html = resp.text
 
             # Handle /r?key=...&id=... pages → JS redirect to /file/XXX
-            js_redirect = re.search(r'window\.location\.replace\(["\']([^"\']+)["\']\)', html)
+            js_redirect = _RE_JS_REDIRECT.search(html)
             if js_redirect:
                 redirect_path = js_redirect.group(1)
                 if redirect_path.startswith('/'):
@@ -271,7 +330,7 @@ def get_driveseed_download_url(driveseed_url: str, retries: int = 2) -> tuple[st
                     file_url = f"{p.scheme}://{p.netloc}{redirect_path}"
                 else:
                     file_url = redirect_path
-                resp = SESSION.get(file_url, timeout=30)
+                resp = SESSION.get(file_url, timeout=12)
                 resp.raise_for_status()
                 html = resp.text
             filename, _ = _extract_filename_and_size(html)
@@ -288,7 +347,7 @@ def get_driveseed_download_url(driveseed_url: str, retries: int = 2) -> tuple[st
                 
                 print(f"    [+] Found Resume Cloud link, fetching zfile page: {zfile_url}")
                 try:
-                    zfile_resp = SESSION.get(zfile_url, timeout=30)
+                    zfile_resp = SESSION.get(zfile_url, timeout=12)
                     zfile_resp.raise_for_status()
                     html += "\n" + zfile_resp.text
                 except Exception as ze:
@@ -398,11 +457,14 @@ def get_driveseed_download_url(driveseed_url: str, retries: int = 2) -> tuple[st
             # Try each candidate in priority order
             for method, dl_url in download_candidates:
                 if method == 'CLOUD' and ('.r2.dev/' in dl_url or 'workers.dev/' in dl_url):
+                    _ds_cache_set(cache_key, dl_url, filename, None, method)
                     return dl_url, filename, method
                 if method == 'TELEGRAM' and 'tgseed.link' in dl_url:
+                    _ds_cache_set(cache_key, dl_url, filename, None, method)
                     return dl_url, filename, method
                 final_url = _follow_download_link(dl_url)
                 if final_url:
+                    _ds_cache_set(cache_key, final_url, filename, None, method)
                     return final_url, filename, method
 
             raise ValueError(f"All download methods failed ({', '.join(m for m, _ in download_candidates)})")
@@ -411,6 +473,152 @@ def get_driveseed_download_url(driveseed_url: str, retries: int = 2) -> tuple[st
             last_error = e
             if attempt <= retries:
                 time.sleep(0.5 * attempt)  # backoff
+
+    raise last_error or ValueError(f"Failed after {retries + 1} attempts")
+
+
+def resolve_driveseed(driveseed_url: str, retries: int = 2) -> tuple[str, str | None, int | None, str]:
+    """
+    Unified resolution: fetches a driveseed page ONCE and returns both
+    metadata and the download URL in a single pass.
+
+    Returns (download_url, filename, size_bytes, method).
+    This eliminates the double-fetch that happens when calling
+    get_driveseed_file_metadata() + get_driveseed_download_url() separately.
+    """
+    # Check cache first
+    cache_key = _ds_cache_key(driveseed_url)
+    cached = _ds_cache_get(cache_key)
+    if cached:
+        return cached  # (dl_url, fname, size, method)
+
+    last_error = None
+
+    for attempt in range(1, retries + 2):
+        try:
+            resp = SESSION.get(driveseed_url, timeout=12)
+            resp.raise_for_status()
+            html = resp.text
+
+            # Handle /r?key=...&id=... pages → JS redirect to /file/XXX
+            js_redirect = _RE_JS_REDIRECT.search(html)
+            if js_redirect:
+                redirect_path = js_redirect.group(1)
+                if redirect_path.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    file_url = f"{p.scheme}://{p.netloc}{redirect_path}"
+                else:
+                    file_url = redirect_path
+                resp = SESSION.get(file_url, timeout=12)
+                resp.raise_for_status()
+                html = resp.text
+
+            # Extract metadata from the same HTML (no extra fetch!)
+            filename, size_bytes = _extract_filename_and_size(html)
+
+            # If the page contains a "/zfile/" link (Resume Cloud), fetch that page too
+            zfile_match = re.search(r'href=["\']([^"\']*/zfile/[^"\']+)["\']', html)
+            if zfile_match:
+                zfile_path = zfile_match.group(1)
+                if zfile_path.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    zfile_url = f"{p.scheme}://{p.netloc}{zfile_path}"
+                else:
+                    zfile_url = zfile_path
+                try:
+                    zfile_resp = SESSION.get(zfile_url, timeout=12)
+                    zfile_resp.raise_for_status()
+                    html += "\n" + zfile_resp.text
+                except Exception:
+                    pass
+
+            # Extract download links (same logic as get_driveseed_download_url)
+            methods = {'V2': [], 'V1': [], 'CLOUD': [], 'seed': [], 'TELEGRAM': []}
+            seen_urls = set()
+
+            anchor_pattern = r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>'
+            for match in re.finditer(anchor_pattern, html, re.IGNORECASE | re.DOTALL):
+                href = match.group(1).strip()
+                if not href or href.startswith('#') or href.startswith('javascript:'):
+                    continue
+                if href.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    href = f"{p.scheme}://{p.netloc}{href}"
+                raw_label = match.group(2)
+                clean_label = ' '.join(re.sub(r'<[^>]+>', '', raw_label).split()).strip().lower()
+                if href in seen_urls:
+                    continue
+                if 'instant download v2' in clean_label:
+                    methods['V2'].append(href); seen_urls.add(href)
+                elif 'instant download' in clean_label:
+                    methods['V1'].append(href); seen_urls.add(href)
+                elif 'cloud' in clean_label or 'resume' in clean_label:
+                    methods['CLOUD'].append(href); seen_urls.add(href)
+                elif 'telegram' in clean_label:
+                    methods['TELEGRAM'].append(href); seen_urls.add(href)
+                elif 'video-seed' in href.lower():
+                    methods['seed'].append(href); seen_urls.add(href)
+
+            for m in re.finditer(r'https?://[^\s"\'<>]+\.r2\.dev/[^\s"\'<>]+', html, re.IGNORECASE):
+                url = m.group(0)
+                if url not in seen_urls:
+                    methods['CLOUD'].append(url); seen_urls.add(url)
+            for m in re.finditer(r'https?://[^\s"\'<>]*tgseed\.link/[^\s"\'<>]*', html, re.IGNORECASE):
+                url = m.group(0)
+                if url not in seen_urls:
+                    methods['TELEGRAM'].append(url); seen_urls.add(url)
+
+            v2_match = re.search(r'href=["\']([^"\']*instant\.video-[a-zA-Z0-9-]+\.[a-z]+[^"\']*)["\']', html, re.IGNORECASE)
+            if v2_match:
+                url = v2_match.group(1)
+                if url.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    url = f"{p.scheme}://{p.netloc}{url}"
+                if url not in seen_urls:
+                    methods['V2'].append(url); seen_urls.add(url)
+            v1_match = re.search(r'href=["\']([^"\']*cdn\.video-[a-zA-Z0-9-]+\.[a-z]+[^"\']*)["\']', html, re.IGNORECASE)
+            if v1_match:
+                url = v1_match.group(1)
+                if url.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    url = f"{p.scheme}://{p.netloc}{url}"
+                if url not in seen_urls:
+                    methods['V1'].append(url); seen_urls.add(url)
+            vs_match = re.search(r'href=["\']([^"\']*video-seed\.[a-z]+[^"\']*)["\']', html, re.IGNORECASE)
+            if vs_match:
+                url = vs_match.group(1)
+                if url.startswith('/'):
+                    p = urlparse(driveseed_url)
+                    url = f"{p.scheme}://{p.netloc}{url}"
+                if url not in seen_urls:
+                    methods['seed'].append(url); seen_urls.add(url)
+
+            download_candidates = []
+            for method in ['V2', 'V1', 'CLOUD', 'seed', 'TELEGRAM']:
+                for url in methods[method]:
+                    download_candidates.append((method, url))
+
+            if not download_candidates:
+                raise ValueError(f"No download links found on {driveseed_url}")
+
+            for method, dl_url in download_candidates:
+                if method == 'CLOUD' and ('.r2.dev/' in dl_url or 'workers.dev/' in dl_url):
+                    _ds_cache_set(cache_key, dl_url, filename, size_bytes, method)
+                    return dl_url, filename, size_bytes, method
+                if method == 'TELEGRAM' and 'tgseed.link' in dl_url:
+                    _ds_cache_set(cache_key, dl_url, filename, size_bytes, method)
+                    return dl_url, filename, size_bytes, method
+                final_url = _follow_download_link(dl_url)
+                if final_url:
+                    _ds_cache_set(cache_key, final_url, filename, size_bytes, method)
+                    return final_url, filename, size_bytes, method
+
+            raise ValueError(f"All download methods failed ({', '.join(m for m, _ in download_candidates)})")
+
+        except Exception as e:
+            last_error = e
+            if attempt <= retries:
+                time.sleep(0.5 * attempt)
 
     raise last_error or ValueError(f"Failed after {retries + 1} attempts")
 

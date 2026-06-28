@@ -16,6 +16,8 @@ Usage:
 from urllib.parse import urljoin
 import re
 import sys
+import threading
+import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
@@ -24,17 +26,20 @@ from skip_shortener import bypass_shortener
 
 WORKING_PROXY = None
 CACHED_PROXIES = []
+_PROXY_CACHE_TIME = 0  # timestamp of last fetch
+_PROXY_CACHE_TTL = 600  # 10-minute TTL
 
 def get_proxy_list() -> list[str]:
-    """Fetch a fresh list of HTTP proxies from Proxyscrape."""
-    global CACHED_PROXIES
-    if CACHED_PROXIES:
+    """Fetch a fresh list of HTTP proxies from Proxyscrape with a 10-minute TTL cache."""
+    global CACHED_PROXIES, _PROXY_CACHE_TIME
+    if CACHED_PROXIES and (time.time() - _PROXY_CACHE_TIME < _PROXY_CACHE_TTL):
         return list(CACHED_PROXIES)
     try:
         proxy_url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all'
-        r = requests.get(proxy_url, timeout=(3.05, 5))
+        r = requests.get(proxy_url, timeout=(2, 3))
         proxies = [p.strip() for p in r.text.strip().split('\n') if p.strip()]
         CACHED_PROXIES = list(proxies)
+        _PROXY_CACHE_TIME = time.time()
         return proxies
     except Exception as e:
         print(f"    [-] Failed to fetch proxy list: {e}")
@@ -77,7 +82,7 @@ def scrape_links(page_url: str) -> list[dict]:
                     'Chrome/131.0.0.0 Safari/537.36'
                 ),
             },
-            timeout=(3.05, 7)  # strict 3s connect timeout, 7s read timeout
+            timeout=(2, 5)  # strict 2s connect timeout, 5s read timeout
         )
         if resp.status_code == 200 and "Just a moment..." not in resp.text:
             html = resp.text
@@ -199,8 +204,13 @@ def scrape_links(page_url: str) -> list[dict]:
 
 
 def find_working_proxy_for_url(url: str, candidates: list[str]) -> str:
-    """Test candidate proxies in parallel and return the first one that successfully reaches the URL."""
+    """Test candidate proxies in parallel and return the first one that successfully reaches the URL.
+    Uses a threading.Event for immediate early-exit once any proxy succeeds."""
+    found_event = threading.Event()
+
     def test_one(p):
+        if found_event.is_set():
+            return None  # Another thread already found a working proxy
         try:
             p_dict = {'http': f'http://{p}', 'https': f'http://{p}'}
             resp = requests.get(
@@ -215,9 +225,12 @@ def find_working_proxy_for_url(url: str, candidates: list[str]) -> str:
                 proxies=p_dict,
                 stream=True,
                 allow_redirects=False,
-                timeout=(3.05, 5),
+                timeout=(2, 3),
             )
+            if found_event.is_set():
+                return None  # Lost the race
             if resp.status_code in (200, 301, 302, 307):
+                found_event.set()  # Signal all other workers to bail out
                 return p
         except Exception:
             pass
@@ -252,7 +265,7 @@ def follow_redirect(url: str) -> str:
                 },
                 proxies={'http': f'http://{WORKING_PROXY}', 'https': f'http://{WORKING_PROXY}'},
                 stream=True,
-                timeout=(3.05, 10),
+                timeout=(2, 8),
             )
             final_url = resp.url
             html = ""
@@ -303,7 +316,7 @@ def follow_redirect(url: str) -> str:
             },
             proxies=proxies,
             stream=True,
-            timeout=(3.05, 10),
+            timeout=(2, 8),
         )
         final_url = resp.url
         html = ""

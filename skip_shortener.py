@@ -13,9 +13,85 @@ import re
 import sys
 import threading
 import time
-from urllib.parse import urlparse
+from collections import OrderedDict
+from urllib.parse import urlparse, parse_qs
 import requests
+from requests.adapters import HTTPAdapter
 from html.parser import HTMLParser
+
+
+# ── Pre-compiled regex patterns (avoid recompilation per call) ──────────
+_RE_COOKIE_SETTER = re.compile(
+    r"s_\d+\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*,\s*(\d+)\s*\)"
+)
+_RE_COOKIE_DIRECT = re.compile(
+    r"document\.cookie\s*=\s*['\"]([^=]+)=([^;]+);"
+)
+_RE_PEPE_NAME = re.compile(r"['\"]?(pepe-[a-f0-9]+)['\"]?")
+_RE_DEST_PATTERNS = [
+    re.compile(r'href=["\']([^"\']*driveseed[^"\']*)["\']', re.IGNORECASE),
+    re.compile(r'href=["\']([^"\']*drive\.[^"\']*)["\']', re.IGNORECASE),
+    re.compile(r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE),
+    re.compile(r'http-equiv=["\']refresh["\'][^>]*url=([^"\'>\s]+)', re.IGNORECASE),
+    re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>.*?(?:download|destination)', re.IGNORECASE),
+]
+
+
+# ── SID → Final URL result cache (TTL-based LRU) ───────────────────────
+_BYPASS_CACHE = OrderedDict()  # key: sid_value → (final_url, timestamp)
+_BYPASS_CACHE_LOCK = threading.Lock()
+_BYPASS_CACHE_MAX = 500
+_BYPASS_CACHE_TTL = 1800  # 30 minutes
+
+
+def _cache_get(sid: str) -> str | None:
+    """Return cached final URL for this SID if still fresh, else None."""
+    with _BYPASS_CACHE_LOCK:
+        entry = _BYPASS_CACHE.get(sid)
+        if entry is None:
+            return None
+        final_url, ts = entry
+        if time.time() - ts > _BYPASS_CACHE_TTL:
+            _BYPASS_CACHE.pop(sid, None)
+            return None
+        # Move to end (LRU refresh)
+        _BYPASS_CACHE.move_to_end(sid)
+        return final_url
+
+
+def _cache_set(sid: str, final_url: str) -> None:
+    """Store a resolved SID → final URL with current timestamp."""
+    with _BYPASS_CACHE_LOCK:
+        _BYPASS_CACHE[sid] = (final_url, time.time())
+        _BYPASS_CACHE.move_to_end(sid)
+        while len(_BYPASS_CACHE) > _BYPASS_CACHE_MAX:
+            _BYPASS_CACHE.popitem(last=False)
+
+
+def _extract_sid(url: str) -> str | None:
+    """Extract the ?sid= parameter from a shortener URL."""
+    try:
+        qs = parse_qs(urlparse(url).query)
+        sids = qs.get('sid')
+        return sids[0] if sids else None
+    except Exception:
+        return None
+
+
+# ── Module-level connection-pooled session ──────────────────────────────
+_POOL_SESSION = requests.Session()
+_POOL_SESSION.headers.update({
+    'User-Agent': (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/131.0.0.0 Safari/537.36'
+    ),
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.5',
+})
+_pool_adapter = HTTPAdapter(pool_connections=10, pool_maxsize=10)
+_POOL_SESSION.mount('https://', _pool_adapter)
+_POOL_SESSION.mount('http://', _pool_adapter)
 
 
 class FormExtractor(HTMLParser):
@@ -56,21 +132,18 @@ def extract_cookie_call(html: str) -> tuple:
     """
     Extract the s_XXX('cookie_name', 'cookie_value', expiry) call from JS.
     Returns (cookie_name, cookie_value) or (None, None).
+    Uses pre-compiled regex patterns for speed.
     """
-    # Pattern: s_343('pepe-XXXX', 'long_value', 60)
-    pattern = r"s_\d+\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*,\s*(\d+)\s*\)"
-    match = re.search(pattern, html)
+    match = _RE_COOKIE_SETTER.search(html)
     if match:
         return match.group(1), match.group(2)
 
-    # Alternative: direct cookie set
-    pattern2 = r"document\.cookie\s*=\s*['\"]([^=]+)=([^;]+);"
-    match2 = re.search(pattern2, html)
+    match2 = _RE_COOKIE_DIRECT.search(html)
     if match2:
         return match2.group(1), match2.group(2)
 
     # Fallback: look for pepe-XXXX pattern and nearby value
-    pepe_match = re.search(r"['\"]?(pepe-[a-f0-9]+)['\"]?", html)
+    pepe_match = _RE_PEPE_NAME.search(html)
     if pepe_match:
         cookie_name = pepe_match.group(1)
         escaped = re.escape(cookie_name)
@@ -113,7 +186,7 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
                     'Origin': f'https://{shortener_domain}',
                 },
                 allow_redirects=True,
-                timeout=15
+                timeout=10
             )
             if resp.status_code in (500, 502, 503, 504):
                 resp.raise_for_status()
@@ -123,7 +196,7 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
                 print(f"    [-] POST attempt {attempt+1} failed: {e}")
             if attempt == 2:
                 raise e
-            time.sleep(1.5 * (attempt + 1))
+            time.sleep(0.5 * (attempt + 1))
 
     if verbose:
         print(f"    Status: {resp.status_code}, URL: {resp.url}")
@@ -140,38 +213,40 @@ BYPASS_SEM = threading.Semaphore(3)
 def bypass_shortener(url: str, verbose: bool = True, session: requests.Session = None) -> str:
     """
     Bypass the URL shortener and return the final URL.
-    Allows parallel execution up to 3 slots, with staggered starts and isolated requests.Session jars.
+    Allows parallel execution up to 3 slots with isolated cookie jars.
+    Uses SID-keyed cache — repeated calls for the same SID return instantly.
     """
     global LAST_WORKING_DOMAIN, BYPASS_SEM
 
-    # Stagger start slightly to prevent hitting the server at the exact same millisecond
-    stagger_time = 0.25 * (hash(url) % 5)
-    if verbose:
-        print(f"[*] Staggering resolution of {urlparse(url).netloc} by {stagger_time:.2f}s...")
-    time.sleep(stagger_time)
+    # ── Cache lookup: return instantly if we've resolved this SID before ──
+    sid = _extract_sid(url)
+    if sid:
+        cached = _cache_get(sid)
+        if cached:
+            if verbose:
+                print(f"[*] Cache HIT for SID {sid[:20]}… → {cached}")
+            return cached
 
     with BYPASS_SEM:
-        # Create a new Session to isolate cookie jars and prevent thread-safety issues,
-        # but copy headers, mounts, and proxies from the caller's session!
+        # Re-check cache inside the semaphore (another thread may have resolved it while we waited)
+        if sid:
+            cached = _cache_get(sid)
+            if cached:
+                if verbose:
+                    print(f"[*] Cache HIT (post-sem) for SID {sid[:20]}… → {cached}")
+                return cached
+
+        # Create an isolated session that shares the module-level connection pool
+        # but has its own cookie jar (critical for thread safety)
+        iso_session = requests.Session()
+        # Share the pooled adapters for TCP/TLS connection reuse
+        for prefix, adapter in _POOL_SESSION.adapters.items():
+            iso_session.mount(prefix, adapter)
+        iso_session.headers.update(_POOL_SESSION.headers)
+        # Copy caller's proxies if provided
         if session is not None:
-            caller_session = session
-            session = requests.Session()
-            session.headers.update(caller_session.headers)
-            session.auth = caller_session.auth
-            session.proxies.update(caller_session.proxies)
-            for prefix, adapter in caller_session.adapters.items():
-                session.mount(prefix, adapter)
-        else:
-            session = requests.Session()
-            session.headers.update({
-                'User-Agent': (
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/131.0.0.0 Safari/537.36'
-                ),
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-            })
+            iso_session.proxies.update(session.proxies)
+        session = iso_session
 
         target_url = url
         try:
@@ -198,7 +273,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                 resp = None
                 for attempt in range(3):
                     try:
-                        resp = session.get(target_url, allow_redirects=True, timeout=15)
+                        resp = session.get(target_url, allow_redirects=True, timeout=10)
                         if resp.status_code in (500, 502, 503, 504):
                             resp.raise_for_status()
                         break
@@ -207,7 +282,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                             print(f"    [-] GET attempt {attempt+1} failed: {e}")
                         if attempt == 2:
                             raise e
-                        time.sleep(1.5 * (attempt + 1))
+                        time.sleep(0.5 * (attempt + 1))
                 
                 if verbose:
                     print(f"    Status: {resp.status_code}, URL: {resp.url}")
@@ -282,7 +357,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                             go_url,
                             headers={'Referer': current_url},
                             allow_redirects=True,
-                            timeout=15
+                            timeout=10
                         )
                         if resp_final.status_code in (500, 502, 503, 504):
                             resp_final.raise_for_status()
@@ -292,7 +367,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                             print(f"    [-] GET ?go= attempt {attempt+1} failed: {e}")
                         if attempt == 2:
                             raise e
-                        time.sleep(1.5 * (attempt + 1))
+                        time.sleep(0.5 * (attempt + 1))
 
                 final_url = resp_final.url
 
@@ -302,14 +377,8 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                     if verbose:
                         print("    Still on shortener domain, looking for destination...")
 
-                    for pattern in [
-                        r'href=["\']([^"\']*driveseed[^"\']*)["\']',
-                        r'href=["\']([^"\']*drive\.[^"\']*)["\']',
-                        r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']',
-                        r'http-equiv=["\']refresh["\'][^>]*url=([^"\'>\s]+)',
-                        r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>.*?(?:download|destination)',
-                    ]:
-                        m = re.search(pattern, resp_final.text, re.IGNORECASE)
+                    for pat in _RE_DEST_PATTERNS:
+                        m = pat.search(resp_final.text)
                         if m:
                             candidate = m.group(1)
                             candidate_domain = urlparse(candidate).netloc.lower()
@@ -329,8 +398,9 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                     print(f"  FINAL URL: {final_url}")
                     print(f"{'=' * 60}")
 
-                # Add a tiny delay between releases to be gentle to the server
-                time.sleep(0.5)
+                # Cache the result for instant future lookups
+                if sid:
+                    _cache_set(sid, final_url)
                 return final_url
 
             except Exception as e:

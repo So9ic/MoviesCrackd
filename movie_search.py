@@ -68,7 +68,7 @@ def fetch_with_fallback(url, max_proxies=50):
                     ),
                 },
                 proxies=p_dict,
-                timeout=(3.05, 6)
+                timeout=(2, 5)
             )
             if resp.status_code == 200 and "Just a moment..." not in resp.text:
                 return resp.text
@@ -86,7 +86,7 @@ def fetch_with_fallback(url, max_proxies=50):
                     'Chrome/131.0.0.0 Safari/537.36'
                 ),
             },
-            timeout=(3.05, 6)
+            timeout=(2, 5)
         )
         if resp.status_code == 200 and "Just a moment..." not in resp.text:
             return resp.text
