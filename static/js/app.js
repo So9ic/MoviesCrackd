@@ -128,6 +128,7 @@
       if (tab === 'search') {
         document.querySelector('.tab-btn:nth-child(1)')?.classList.add('active');
         document.getElementById('search-view').classList.add('active');
+        clearDirectDownloadsState();
       } else {
         document.querySelector('.tab-btn:nth-child(2)')?.classList.add('active');
         document.getElementById('direct-view').classList.add('active');
@@ -1834,6 +1835,8 @@
       
       // Keep tabs container hidden since the user is in details view
       setTabsDisplay('none');
+
+      clearDirectDownloadsState();
     }
 
     // Download API communication handlers
@@ -2024,7 +2027,7 @@
     function pollDownloads() {
       if (activeTab !== 'direct') return; // only poll active view
       
-      fetch('/api/downloads')
+      fetch('/api/downloads?clientId=' + encodeURIComponent(getOrCreateClientId()))
         .then(r => r.json())
         .then(data => {
           const list = document.getElementById('downloads-list');
@@ -2223,7 +2226,7 @@
     }
 
     function pollStatus() {
-      fetch('/api/status')
+      fetch('/api/status?clientId=' + encodeURIComponent(getOrCreateClientId()))
         .then(r => r.json())
         .then(data => {
           isCloudMode = !!data.cloud_mode;
@@ -2306,12 +2309,47 @@
       fetch('/api/retry', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ index: index })
+        body: JSON.stringify({ index: index, clientId: getOrCreateClientId() })
       });
     }
 
     function retryFailedAll() {
-      fetch('/api/retry-all', { method: 'POST' });
+      fetch('/api/retry-all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: getOrCreateClientId() })
+      });
     }
+
+    function clearDirectDownloadsState() {
+      // Send clear request to the server
+      fetch('/api/downloads/clear', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: getOrCreateClientId() })
+      }).catch(err => console.error("Error clearing downloads state:", err));
+
+      // Clear local cards list and reset progress maps immediately
+      const list = document.getElementById('downloads-list');
+      if (list) {
+        list.innerHTML = '';
+      }
+      cardProgressCreep = {};
+      isResolvingNewDownload = false;
+    }
+
+    window.addEventListener('beforeunload', () => {
+      const bodyStr = JSON.stringify({ clientId: getOrCreateClientId() });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon('/api/downloads/clear', bodyStr);
+      } else {
+        fetch('/api/downloads/clear', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: bodyStr,
+          keepalive: true
+        });
+      }
+    });
 
 

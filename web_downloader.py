@@ -360,24 +360,52 @@ class VirtualDownloadCard:
         }
 
 
+class ClientState:
+    def __init__(self, client_id, output_dir):
+        self.client_id = client_id
+        self.cards: list[VirtualDownloadCard] = []
+        self.done_count = 0
+        self.fail_count = 0
+        self.total_count = 0
+        self.active_threads = 0
+        self.output_dir = output_dir
+        self.active_title = "Direct URL Input"
+        self.generation = 0
+
+
 # ── Standalone Download Manager Core ─────────────────────────────────────
 
 class DownloaderBackend:
     def __init__(self):
         self.output_dir = os.path.expanduser("/media/so9ic/HDD/Downloads/Movies")
         self.cloud_mode = os.getenv("CLOUD_MODE", "false").lower() == "true" or "DISPLAY" not in os.environ
-        self.cards: list[VirtualDownloadCard] = []
+        self.client_states: dict[str, ClientState] = {}
+        self._states_lock = threading.Lock()
         self.download_queue = PriorityQueue()
-        self._active_threads = 0
         self._lock = threading.Lock()
         self._telegram_lock = threading.Lock()
-
+        
+        # Obsolete global counters (maintained as properties for backward compatibility if needed, but not used internally)
         self._done_count = 0
         self._fail_count = 0
         self._total_count = 0
+        self._active_threads = 0
         
         self.client_id = None
         self.active_title = 'Direct URL Input'
+
+    def get_client_state(self, client_id: str | None) -> ClientState:
+        cid = client_id or "anonymous"
+        with self._states_lock:
+            if cid not in self.client_states:
+                self.client_states[cid] = ClientState(cid, self.output_dir)
+            return self.client_states[cid]
+
+    def clear_client_state(self, client_id: str | None) -> None:
+        cid = client_id or "anonymous"
+        with self._states_lock:
+            if cid in self.client_states:
+                del self.client_states[cid]
 
         # Start MODLIST polling loop
         self._launch_modlist_poller()
@@ -427,44 +455,47 @@ class DownloaderBackend:
             print(f"[-] Native dialog failed: {e}", flush=True)
             return ""
 
-    def start_pipeline(self, url, output_dir):
-        self.output_dir = output_dir
+    def start_pipeline(self, url, output_dir, client_id=None):
+        state = self.get_client_state(client_id)
+        state.output_dir = output_dir
 
         with self._lock:
-            self._done_count = 0
-            self._fail_count = 0
-            self._total_count = 0
-            self._active_threads = 0
-            self.cards.clear()
+            state.generation += 1
+            state.done_count = 0
+            state.fail_count = 0
+            state.total_count = 0
+            state.active_threads = 0
+            state.cards.clear()
 
-        while not self.download_queue.empty():
-            try:
-                self.download_queue.get_nowait()
-            except Empty:
-                break
+        # Do not clear the queue as it contains other clients' downloads!
 
         threading.Thread(target=prewarm_dns, daemon=True).start()
-        threading.Thread(target=self._resolve_pipeline, args=(url,), daemon=True).start()
+        threading.Thread(target=self._resolve_pipeline, args=(url, state.client_id, state.generation), daemon=True).start()
 
-    def _resolve_pipeline(self, url):
+    def _resolve_pipeline(self, url, client_id, generation):
+        state = self.get_client_state(client_id)
+        if state.generation != generation:
+            return
         try:
             if "tgseed.link" in url:
-                self._resolve_single_telegram_url(url)
+                self._resolve_single_telegram_url(url, client_id, generation)
                 return
 
             if ".r2.dev/" in url:
-                self._resolve_single_cloud_url(url)
+                self._resolve_single_cloud_url(url, client_id, generation)
                 return
 
             if "driveseed.org" in url:
-                self._resolve_single_driveseed(url, 0)
+                self._resolve_single_driveseed(url, 0, client_id, generation)
                 return
 
             if not HAS_BATCH:
                 print("[-] Batch module missing")
                 card = VirtualDownloadCard(1, "Error", "ERROR")
                 card.mark_failed("Batch module missing on server")
-                self.cards.append(card)
+                with self._lock:
+                    if state.generation == generation:
+                        state.cards.append(card)
                 return
 
             links = scrape_links(url)
@@ -472,23 +503,29 @@ class DownloaderBackend:
                 print("[-] No download links found on page")
                 card = VirtualDownloadCard(1, "No links found", "ERROR")
                 card.mark_failed("No download links found on page")
-                self.cards.append(card)
+                with self._lock:
+                    if state.generation == generation:
+                        state.cards.append(card)
                 return
 
             total = len(links)
             with self._lock:
-                self._total_count = total
+                if state.generation != generation:
+                    return
+                state.total_count = total
 
             # Create placeholder cards
             for i in range(total):
                 card = VirtualDownloadCard(i + 1, "Resolving…", "…")
                 card.set_status("Resolving…")
                 card.set_progress(0.15)
-                self.cards.append(card)
+                with self._lock:
+                    if state.generation == generation:
+                        state.cards.append(card)
 
             existing = set()
-            if os.path.isdir(self.output_dir):
-                existing = set(os.listdir(self.output_dir))
+            if os.path.isdir(state.output_dir):
+                existing = set(os.listdir(state.output_dir))
 
             workers_started = [0]
             workers_lock = threading.Lock()
@@ -497,19 +534,25 @@ class DownloaderBackend:
                 """
                 Fire-and-forget worker: independently resolves one link and
                 updates its card immediately — no futures/as_completed blocking.
-                Each card appears on the UI as soon as it finishes resolving.
-                Auto-retries up to MAX_AUTO_RETRIES times on failure before
-                marking as failed with a manual Retry button.
                 """
-                card = self.cards[i]
+                state_inner = self.get_client_state(client_id)
+                if state_inner.generation != generation:
+                    return
+                if i >= len(state_inner.cards):
+                    return
+                card = state_inner.cards[i]
                 last_error = "Unknown error"
                 best_name = None  # Preserve the best filename across retries
 
                 for attempt in range(MAX_AUTO_RETRIES):
                     try:
+                        if state_inner.generation != generation:
+                            return
                         if attempt > 0:
                             # Brief pause between auto-retries, then reset animation
                             time.sleep(0.5)
+                            if state_inner.generation != generation:
+                                return
                             card.set_status("Resolving…")
                             card.set_progress(0.15)
 
@@ -518,6 +561,9 @@ class DownloaderBackend:
                         card.set_progress(0.4)
                         _, name, ds_url = resolve_link(i, link, session=SESSION)
                         source_link = dict(link) if isinstance(link, dict) else None
+
+                        if state_inner.generation != generation:
+                            return
 
                         # Show filename on card immediately (visible in next poll)
                         if name:
@@ -540,17 +586,19 @@ class DownloaderBackend:
                             fname = name or f"Link {i + 1}"
                             fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                             item = {
+                                "client_id": client_id,
+                                "generation": generation,
                                 "filename": fname,
                                 "download_url": ds_url,
                                 "method": "TELEGRAM",
-                                "target_dir": self.output_dir,
+                                "target_dir": state_inner.output_dir,
                                 "expected_size_bytes": expected_size,
                                 "source_link": source_link,
                                 "source_index": i,
                                 "source_name_hint": name,
                                 "source_driveseed_url": None,
                             }
-                            self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                            self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                             return  # Success!
 
                         # ── Direct Cloud R2 link ──
@@ -558,17 +606,19 @@ class DownloaderBackend:
                             fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{i + 1}"
                             fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                             item = {
+                                "client_id": client_id,
+                                "generation": generation,
                                 "filename": fname,
                                 "download_url": ds_url,
                                 "method": "CLOUD",
-                                "target_dir": self.output_dir,
+                                "target_dir": state_inner.output_dir,
                                 "expected_size_bytes": expected_size,
                                 "source_link": source_link,
                                 "source_index": i,
                                 "source_name_hint": name,
                                 "source_driveseed_url": None,
                             }
-                            self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                            self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                             return  # Success!
 
                         # ── Not a valid link — auto-retry ──
@@ -588,17 +638,19 @@ class DownloaderBackend:
                         fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
 
                         item = {
+                            "client_id": client_id,
+                            "generation": generation,
                             "filename": fname,
                             "download_url": dl_url,
                             "method": method,
-                            "target_dir": self.output_dir,
+                            "target_dir": state_inner.output_dir,
                             "expected_size_bytes": meta_size,
                             "source_link": source_link,
                             "source_index": i,
                             "source_name_hint": name,
                             "source_driveseed_url": ds_url,
                         }
-                        self._finalize_card(card, i, item, existing, workers_started, workers_lock)
+                        self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                         return  # Success!
 
                     except Exception as e:
@@ -606,20 +658,24 @@ class DownloaderBackend:
                         continue  # Auto-retry
 
                 # All auto-retries exhausted — mark as failed with manual Retry button
+                if state_inner.generation != generation:
+                    return
                 source_link = dict(link) if isinstance(link, dict) else None
                 display_name = best_name or (link.get("name") if isinstance(link, dict) else None) or f"Failed link {i + 1}"
                 card.filename = display_name
                 card.item_data = {
+                    "client_id": client_id,
+                    "generation": generation,
                     "source_link": source_link,
                     "source_index": i,
                     "source_name_hint": display_name,
                 }
                 card.mark_failed(last_error)
                 with self._lock:
-                    self._fail_count += 1
+                    if state_inner.generation == generation:
+                        state_inner.fail_count += 1
 
-            # Fire all resolve threads independently (semaphore in skip_shortener
-            # limits actual shortener concurrency to 3; driveseed calls are unthrottled)
+            # Fire all resolve threads independently
             for i, lnk in enumerate(links):
                 threading.Thread(
                     target=_resolve_single_card,
@@ -631,18 +687,22 @@ class DownloaderBackend:
             print(f"[-] Resolve error: {e}", flush=True)
             card = VirtualDownloadCard(1, "Error", "ERROR")
             card.mark_failed(f"Resolution error: {str(e)}")
-            self.cards.append(card)
+            with self._lock:
+                if state.generation == generation:
+                    state.cards.append(card)
 
-    def _finalize_card(self, card, idx, item, existing, workers_started, workers_lock):
+    def _finalize_card(self, card, idx, item, existing, workers_started, workers_lock, client_id, generation):
         """
         Atomically finalize a resolved card: set metadata, url, and decide
         whether to queue for download. Called from independent worker threads.
-        Sets item_data BEFORE url to prevent size flickering on client polls.
         """
+        state = self.get_client_state(client_id)
+        if state.generation != generation:
+            return
+
         fname = item["filename"]
         card.filename = fname
         card.set_method(item.get("method", ""))
-        # IMPORTANT: set item_data first so to_json() sees the size immediately
         card.item_data = item
         card.url = item["download_url"]
 
@@ -650,7 +710,8 @@ class DownloaderBackend:
             card.set_detail("Already downloaded")
             card.mark_done()
             with self._lock:
-                self._done_count += 1
+                if state.generation == generation:
+                    state.done_count += 1
         elif item.get("method") == "TELEGRAM":
             card.set_status("Manual Telegram")
             exp = item.get("expected_size_bytes")
@@ -658,14 +719,15 @@ class DownloaderBackend:
                 f"Click Download to open Telegram Desktop. Expected: {fmt_bytes(exp)}"
                 if exp else "Click Download to open Telegram Desktop."
             )
-            card.set_action("Download", lambda index=idx: self.start_telegram_manual(index))
+            card.set_action("Download", lambda index=idx: self.start_telegram_manual(index, client_id=client_id))
         elif self.cloud_mode:
             card.status = "✓ Ready"
             card.state = 2
             card.progress = 1.0
             card.detail = "Direct link resolved! Click 'Download to Device' below."
             with self._lock:
-                self._done_count += 1
+                if state.generation == generation:
+                    state.done_count += 1
         else:
             card.set_status("Queued")
             self.download_queue.put((idx, item))
@@ -674,11 +736,15 @@ class DownloaderBackend:
                     workers_started[0] += 1
                     threading.Thread(target=self._download_worker, daemon=True).start()
 
-    def _resolve_single_driveseed(self, url, idx):
+    def _resolve_single_driveseed(self, url, idx, client_id, generation):
+        state = self.get_client_state(client_id)
         with self._lock:
-            self._total_count = 1
+            if state.generation == generation:
+                state.total_count = 1
         card = VirtualDownloadCard(1, "Resolving…", "…")
-        self.cards.append(card)
+        with self._lock:
+            if state.generation == generation:
+                state.cards.append(card)
 
         try:
             meta_fname, meta_size = get_driveseed_file_metadata(url)
@@ -688,10 +754,12 @@ class DownloaderBackend:
             fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
             
             item = {
+                "client_id": client_id,
+                "generation": generation,
                 "filename": fname,
                 "download_url": dl_url,
                 "method": method,
-                "target_dir": self.output_dir,
+                "target_dir": state.output_dir,
                 "expected_size_bytes": meta_size,
                 "source_link": None,
                 "source_index": 0,
@@ -703,11 +771,12 @@ class DownloaderBackend:
             card.item_data = item
             card.url = dl_url
 
-            existing = set(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else set()
+            existing = set(os.listdir(state.output_dir)) if os.path.isdir(state.output_dir) else set()
             if fname in existing:
                 card.mark_done()
                 with self._lock:
-                    self._done_count += 1
+                    if state.generation == generation:
+                        state.done_count += 1
                 return
 
             if self.cloud_mode:
@@ -716,7 +785,8 @@ class DownloaderBackend:
                 card.progress = 1.0
                 card.detail = "Direct link resolved! Click 'Download to Device' below."
                 with self._lock:
-                    self._done_count += 1
+                    if state.generation == generation:
+                        state.done_count += 1
                 return
 
             self.download_queue.put((0, item))
@@ -725,21 +795,28 @@ class DownloaderBackend:
         except Exception as e:
             card.mark_failed(str(e))
             with self._lock:
-                self._fail_count += 1
+                if state.generation == generation:
+                    state.fail_count += 1
 
-    def _resolve_single_cloud_url(self, url):
+    def _resolve_single_cloud_url(self, url, client_id, generation):
+        state = self.get_client_state(client_id)
         with self._lock:
-            self._total_count = 1
+            if state.generation == generation:
+                state.total_count = 1
         fname = os.path.basename(urlparse(url).path) or "download_1"
         fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
         card = VirtualDownloadCard(1, fname, "CLOUD")
-        self.cards.append(card)
+        with self._lock:
+            if state.generation == generation:
+                state.cards.append(card)
 
         item = {
+            "client_id": client_id,
+            "generation": generation,
             "filename": fname,
             "download_url": url,
             "method": "CLOUD",
-            "target_dir": self.output_dir,
+            "target_dir": state.output_dir,
             "expected_size_bytes": None,
             "source_link": None,
             "source_index": 0,
@@ -749,11 +826,12 @@ class DownloaderBackend:
         card.item_data = item
         card.url = url
 
-        existing = set(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else set()
+        existing = set(os.listdir(state.output_dir)) if os.path.isdir(state.output_dir) else set()
         if fname in existing:
             card.mark_done()
             with self._lock:
-                self._done_count += 1
+                if state.generation == generation:
+                    state.done_count += 1
             return
 
         if self.cloud_mode:
@@ -762,23 +840,30 @@ class DownloaderBackend:
             card.progress = 1.0
             card.detail = "Direct link resolved! Click 'Download to Device' below."
             with self._lock:
-                self._done_count += 1
+                if state.generation == generation:
+                    state.done_count += 1
             return
 
         self.download_queue.put((0, item))
         threading.Thread(target=self._download_worker, daemon=True).start()
 
-    def _resolve_single_telegram_url(self, url):
+    def _resolve_single_telegram_url(self, url, client_id, generation):
+        state = self.get_client_state(client_id)
         with self._lock:
-            self._total_count = 1
+            if state.generation == generation:
+                state.total_count = 1
         card = VirtualDownloadCard(1, "Telegram file", "TELEGRAM")
-        self.cards.append(card)
+        with self._lock:
+            if state.generation == generation:
+                state.cards.append(card)
 
         item = {
+            "client_id": client_id,
+            "generation": generation,
             "filename": "Telegram file",
             "download_url": url,
             "method": "TELEGRAM",
-            "target_dir": self.output_dir,
+            "target_dir": state.output_dir,
             "expected_size_bytes": None,
             "source_link": None,
             "source_index": 0,
@@ -789,7 +874,7 @@ class DownloaderBackend:
         card.url = url
         card.set_status("Manual Telegram")
         card.set_detail("Click Download to open Telegram Desktop.")
-        card.set_action("Download", lambda: self.start_telegram_manual(0))
+        card.set_action("Download", lambda: self.start_telegram_manual(0, client_id=client_id))
 
     def _download_worker(self):
         while True:
@@ -798,29 +883,41 @@ class DownloaderBackend:
             except Empty:
                 break
 
-            with self._lock:
-                self._active_threads += 1
+            client_id = item.get("client_id", "anonymous")
+            generation = item.get("generation", 0)
+            state = self.get_client_state(client_id)
+            
+            if state.generation != generation:
+                continue
 
-            card = self.cards[idx]
+            with self._lock:
+                state.active_threads += 1
+
+            if idx >= len(state.cards):
+                with self._lock:
+                    state.active_threads -= 1
+                continue
+            card = state.cards[idx]
             card.mark_downloading()
 
             try:
                 url = item["download_url"]
                 method = item.get("method", "")
                 filename = item["filename"]
-                target_dir = item.get("target_dir", self.output_dir)
+                target_dir = item.get("target_dir", state.output_dir)
                 filepath = os.path.join(target_dir, filename)
                 part_path = filepath + ".part"
 
                 if method == "TELEGRAM" or "tgseed.link" in url:
-                    self.start_telegram_manual(idx)
+                    self.start_telegram_manual(idx, client_id=client_id)
                     continue
 
                 if os.path.exists(filepath):
                     file_size = os.path.getsize(filepath)
                     with self._lock:
-                        self._done_count += 1
-                        self._active_threads -= 1
+                        if state.generation == generation:
+                            state.done_count += 1
+                            state.active_threads -= 1
                     card.set_detail(f"Already downloaded ({file_size / (1024 * 1024):.1f} MB)")
                     card.mark_done()
                     continue
@@ -883,18 +980,20 @@ class DownloaderBackend:
                 avg = self._fmt_speed((downloaded - resume_from) / elapsed) if elapsed > 0 else "–"
 
                 with self._lock:
-                    self._done_count += 1
+                    if state.generation == generation:
+                        state.done_count += 1
                 card.mark_done()
                 card.set_detail(f"{total_mb:.1f} MB  •  avg {avg}")
 
             except Exception as e:
                 with self._lock:
-                    self._fail_count += 1
+                    if state.generation == generation:
+                        state.fail_count += 1
                 card.mark_failed(str(e))
 
             finally:
                 with self._lock:
-                    self._active_threads -= 1
+                    state.active_threads -= 1
 
     def _fmt_speed(self, bytes_per_sec: float) -> str:
         if bytes_per_sec <= 0:
@@ -919,21 +1018,24 @@ class DownloaderBackend:
             return f"{m}m {s}s"
         return f"{s}s"
 
-    def resolve_card_retry(self, idx, link):
+    def resolve_card_retry(self, idx, link, client_id=None):
         """Re-resolve a single link that failed during the initial resolution phase (manual retry, unlimited)."""
-        if idx >= len(self.cards):
+        state = self.get_client_state(client_id)
+        if idx >= len(state.cards):
             return
-        card = self.cards[idx]
+        card = state.cards[idx]
         
         # Decrement fail_count since we're transitioning from failed to retrying
         if card.state == 3:
             with self._lock:
-                self._fail_count = max(0, self._fail_count - 1)
+                state.fail_count = max(0, state.fail_count - 1)
         
         card.retry_count += 1
         card.mark_pending()
         card.set_status("Re-resolving…")
         card.set_progress(0.15)
+        
+        generation = state.generation
         
         def _task():
             try:
@@ -953,10 +1055,12 @@ class DownloaderBackend:
                     fname = name or f"Link {idx + 1}"
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                     item = {
+                        "client_id": state.client_id,
+                        "generation": generation,
                         "filename": fname,
                         "download_url": ds_url,
                         "method": "TELEGRAM",
-                        "target_dir": self.output_dir,
+                        "target_dir": state.output_dir,
                         "expected_size_bytes": expected_size,
                         "source_link": source_link,
                         "source_index": idx,
@@ -967,10 +1071,12 @@ class DownloaderBackend:
                     fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{idx + 1}"
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                     item = {
+                        "client_id": state.client_id,
+                        "generation": generation,
                         "filename": fname,
                         "download_url": ds_url,
                         "method": "CLOUD",
-                        "target_dir": self.output_dir,
+                        "target_dir": state.output_dir,
                         "expected_size_bytes": expected_size,
                         "source_link": source_link,
                         "source_index": idx,
@@ -989,10 +1095,12 @@ class DownloaderBackend:
                         fname = meta_fname or os.path.basename(urlparse(dl_url).path) or name or f"download_{idx + 1}"
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
                     item = {
+                        "client_id": state.client_id,
+                        "generation": generation,
                         "filename": fname,
                         "download_url": dl_url,
                         "method": method,
-                        "target_dir": self.output_dir,
+                        "target_dir": state.output_dir,
                         "expected_size_bytes": meta_size,
                         "source_link": source_link,
                         "source_index": idx,
@@ -1005,18 +1113,19 @@ class DownloaderBackend:
                 card.item_data = item
                 card.url = item.get("download_url", "")
 
-                existing = set(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else set()
+                existing = set(os.listdir(state.output_dir)) if os.path.isdir(state.output_dir) else set()
                 if item["filename"] in existing:
                     card.set_detail("Already downloaded")
                     card.mark_done()
                     with self._lock:
-                        self._done_count += 1
+                        if state.generation == generation:
+                            state.done_count += 1
                 else:
                     if item.get("method") == "TELEGRAM":
                         card.set_status("Manual Telegram")
                         exp = item.get("expected_size_bytes")
                         card.set_detail(f"Click Download to open Telegram Desktop. Expected: {fmt_bytes(exp)}" if exp else "Click Download to open Telegram Desktop.")
-                        card.set_action("Download", lambda index=idx: self.start_telegram_manual(index))
+                        card.set_action("Download", lambda index=idx: self.start_telegram_manual(index, client_id=state.client_id))
                     else:
                         if self.cloud_mode:
                             card.status = "✓ Ready"
@@ -1024,15 +1133,18 @@ class DownloaderBackend:
                             card.progress = 1.0
                             card.detail = "Direct link resolved! Click 'Download to Device' below."
                             with self._lock:
-                                self._done_count += 1
+                                if state.generation == generation:
+                                    state.done_count += 1
                         else:
                             card.set_status("Queued")
                             self.download_queue.put((idx, item))
                             with self._lock:
-                                if self._active_threads < MAX_CONCURRENT:
+                                if state.active_threads < MAX_CONCURRENT:
                                     threading.Thread(target=self._download_worker, daemon=True).start()
             except Exception as e:
                 item = {
+                    "client_id": state.client_id,
+                    "generation": generation,
                     "filename": link.get("name") if isinstance(link, dict) else f"Failed link {idx + 1}",
                     "download_url": None,
                     "method": "",
@@ -1045,16 +1157,21 @@ class DownloaderBackend:
                 card.item_data = item
                 card.mark_failed(str(e))
                 with self._lock:
-                    self._fail_count += 1
+                    if state.generation == generation:
+                        state.fail_count += 1
         
         threading.Thread(target=_task, daemon=True).start()
 
     # ── Advanced Telegram Manual Download logic ──
-    def start_telegram_manual(self, idx, is_retry=False):
-        if idx >= len(self.cards):
+    def start_telegram_manual(self, idx, is_retry=False, client_id=None):
+        state = self.get_client_state(client_id)
+        if idx >= len(state.cards):
             return
-        card = self.cards[idx]
+        card = state.cards[idx]
         item = card.item_data or {}
+        
+        item["client_id"] = state.client_id
+        item["generation"] = state.generation
         
         if is_retry:
             removed = self._cleanup_telegram_retry_artifacts(item)
@@ -1065,7 +1182,7 @@ class DownloaderBackend:
             card.set_action("Waiting…")
 
         # Log when the manual Telegram download is clicked and triggered
-        uid = self.client_id if self.client_id else "anonymous"
+        uid = state.client_id if state.client_id else "anonymous"
         active_title = getattr(self, 'active_title', 'Direct URL Input')
         clean_title = clean_log_title(active_title)
         fname = card.filename
@@ -1086,13 +1203,20 @@ class DownloaderBackend:
         ).start()
 
     def _run_telegram_manual_download(self, idx, item, is_retry=False):
-        card = self.cards[idx]
-        target_dir = item.get("target_dir", self.output_dir)
+        client_id = item.get("client_id", "anonymous")
+        generation = item.get("generation", 0)
+        state = self.get_client_state(client_id)
+        
+        if state.generation != generation:
+            return
+            
+        card = state.cards[idx]
+        target_dir = item.get("target_dir", state.output_dir)
         watch_timeout_raw = os.getenv("TELEGRAM_WATCH_TIMEOUT", "").strip()
         watch_timeout = max(0, int(watch_timeout_raw)) if watch_timeout_raw else 0
 
         with self._lock:
-            self._active_threads += 1
+            state.active_threads += 1
 
         try:
             watch_dirs = self._telegram_watch_dirs()
@@ -1211,19 +1335,21 @@ class DownloaderBackend:
                     pass
 
                 with self._lock:
-                    self._done_count += 1
+                    if state.generation == generation:
+                        state.done_count += 1
                 card.mark_done()
                 card.set_detail(f"{os.path.getsize(dest_path)/(1024*1024):.1f} MB  •  avg Telegram")
 
         except Exception as e:
             with self._lock:
-                self._fail_count += 1
+                if state.generation == generation:
+                    state.fail_count += 1
             card.mark_failed(str(e))
-            card.set_action("Retry", lambda index=idx: self.start_telegram_manual(index, is_retry=True))
+            card.set_action("Retry", lambda index=idx: self.start_telegram_manual(index, is_retry=True, client_id=client_id))
 
         finally:
             with self._lock:
-                self._active_threads -= 1
+                state.active_threads -= 1
 
     def _cleanup_telegram_retry_artifacts(self, item) -> int:
         watch_dirs = self._telegram_watch_dirs()
@@ -3312,12 +3438,15 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         # 2. API Status endpoint
         if parsed.path == '/api/status':
             tg_text, tg_color = DOWNLOAD_MGR._get_telegram_ready_status()
+            qs = parse_qs(parsed.query)
+            client_id = qs.get("clientId", ["anonymous"])[0]
+            state = DOWNLOAD_MGR.get_client_state(client_id)
             self.send_json({
-                "done_count": DOWNLOAD_MGR._done_count,
-                "fail_count": DOWNLOAD_MGR._fail_count,
-                "total_count": DOWNLOAD_MGR._total_count,
-                "active_threads": DOWNLOAD_MGR._active_threads,
-                "output_dir": DOWNLOAD_MGR.output_dir,
+                "done_count": state.done_count,
+                "fail_count": state.fail_count,
+                "total_count": state.total_count,
+                "active_threads": state.active_threads,
+                "output_dir": state.output_dir or DOWNLOAD_MGR.output_dir,
                 "cloud_mode": DOWNLOAD_MGR.cloud_mode,
                 "telegram": {
                     "text": tg_text,
@@ -3328,8 +3457,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 
         # 3. API Downloads list endpoint
         if parsed.path == '/api/downloads':
+            qs = parse_qs(parsed.query)
+            client_id = qs.get("clientId", ["anonymous"])[0]
+            state = DOWNLOAD_MGR.get_client_state(client_id)
             self.send_json({
-                "downloads": [card.to_json() for card in DOWNLOAD_MGR.cards]
+                "downloads": [card.to_json() for card in state.cards]
             })
             return
 
@@ -3747,14 +3879,16 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 url = data.get("url")
+                
+                # Parse download telemetry parameters
+                client_id = data.get("clientId")
+                state = DOWNLOAD_MGR.get_client_state(client_id)
                 output_dir = data.get("output_dir", DOWNLOAD_MGR.output_dir)
                 
                 if not url:
                     self.send_json({"error": "Missing url body param"}, 400)
                     return
 
-                # Parse download telemetry parameters
-                client_id = data.get("clientId")
                 title = data.get("title", "Direct URL")
                 option_title = data.get("optionTitle", "")
                 button_text = data.get("buttonText", "")
@@ -3776,10 +3910,20 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     event_msg = f"👤 {uid:<10} | 🚀 DOWNLOAD  | \"{clean_title}\""
                 log_instant_event(event_msg)
 
-                DOWNLOAD_MGR.client_id = client_id
-                DOWNLOAD_MGR.active_title = title
-                DOWNLOAD_MGR.start_pipeline(url, output_dir)
+                state.active_title = title
+                DOWNLOAD_MGR.start_pipeline(url, output_dir, client_id=client_id)
                 self.send_json({"status": "success", "message": "Pipeline initiated"})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+            return
+
+        # 2b. Clear Client resolving downloads
+        if parsed.path == '/api/downloads/clear':
+            try:
+                data = json.loads(body)
+                client_id = data.get("clientId", "anonymous")
+                DOWNLOAD_MGR.clear_client_state(client_id)
+                self.send_json({"status": "success"})
             except Exception as e:
                 self.send_json({"error": str(e)}, 500)
             return
@@ -3787,12 +3931,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         if parsed.path == '/api/retry':
             try:
                 data = json.loads(body)
+                client_id = data.get("clientId", "anonymous")
+                state = DOWNLOAD_MGR.get_client_state(client_id)
                 idx = int(data.get("index", -1))
-                if idx < 0 or idx >= len(DOWNLOAD_MGR.cards):
+                if idx < 0 or idx >= len(state.cards):
                     self.send_json({"error": "Invalid index"}, 400)
                     return
 
-                card = DOWNLOAD_MGR.cards[idx]
+                card = state.cards[idx]
                 item = card.item_data
                 
                 if not item:
@@ -3800,8 +3946,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     return
 
                 # Log the retry event
-                uid = DOWNLOAD_MGR.client_id if DOWNLOAD_MGR.client_id else "anonymous"
-                active_title = getattr(DOWNLOAD_MGR, 'active_title', 'Direct URL Input')
+                uid = client_id
+                active_title = state.active_title
                 clean_title = clean_log_title(active_title)
                 fname = card.filename
                 method = item.get("method", "")
@@ -3816,21 +3962,21 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 if item.get("method") == "TELEGRAM":
                     if card.state == 3:
                         with DOWNLOAD_MGR._lock:
-                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                            state.fail_count = max(0, state.fail_count - 1)
                     card.retry_count += 1
                     card.mark_pending()
-                    DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
+                    DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True, client_id=client_id)
                 elif item.get("download_url"):
                     if card.state == 3:
                         with DOWNLOAD_MGR._lock:
-                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
+                            state.fail_count = max(0, state.fail_count - 1)
                     card.retry_count += 1
                     card.mark_pending()
                     DOWNLOAD_MGR.download_queue.put((idx, item))
                     threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
                 elif item.get("source_link"):
                     # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
-                    DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
+                    DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"), client_id=client_id)
                 else:
                     card.mark_failed("No source link available for retry")
 
@@ -3841,34 +3987,40 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 
         # 4. Retry all failed cards concurrently
         if parsed.path == '/api/retry-all':
-            retried = 0
-            needs_download_worker = False
-            for idx, card in enumerate(DOWNLOAD_MGR.cards):
-                if card.state == 3:  # Failed state
-                    item = card.item_data
-                    if not item:
-                        continue
-                    retried += 1
-                    if item.get("method") == "TELEGRAM":
-                        with DOWNLOAD_MGR._lock:
-                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
-                        card.retry_count += 1
-                        card.mark_pending()
-                        DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True)
-                    elif item.get("download_url"):
-                        with DOWNLOAD_MGR._lock:
-                            DOWNLOAD_MGR._fail_count = max(0, DOWNLOAD_MGR._fail_count - 1)
-                        card.retry_count += 1
-                        card.mark_pending()
-                        DOWNLOAD_MGR.download_queue.put((idx, item))
-                        needs_download_worker = True
-                    elif item.get("source_link"):
-                        # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
-                        DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"))
-            
-            if needs_download_worker:
-                threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
-            self.send_json({"status": "success", "retried": retried})
+            try:
+                data = json.loads(body)
+                client_id = data.get("clientId", "anonymous")
+                state = DOWNLOAD_MGR.get_client_state(client_id)
+                retried = 0
+                needs_download_worker = False
+                for idx, card in enumerate(state.cards):
+                    if card.state == 3:  # Failed state
+                        item = card.item_data
+                        if not item:
+                            continue
+                        retried += 1
+                        if item.get("method") == "TELEGRAM":
+                            with DOWNLOAD_MGR._lock:
+                                state.fail_count = max(0, state.fail_count - 1)
+                            card.retry_count += 1
+                            card.mark_pending()
+                            DOWNLOAD_MGR.start_telegram_manual(idx, is_retry=True, client_id=client_id)
+                        elif item.get("download_url"):
+                            with DOWNLOAD_MGR._lock:
+                                state.fail_count = max(0, state.fail_count - 1)
+                            card.retry_count += 1
+                            card.mark_pending()
+                            DOWNLOAD_MGR.download_queue.put((idx, item))
+                            needs_download_worker = True
+                        elif item.get("source_link"):
+                            # Delegate entirely to resolve_card_retry — it handles fail_count, retry_count, state
+                            DOWNLOAD_MGR.resolve_card_retry(idx, item.get("source_link"), client_id=client_id)
+                
+                if needs_download_worker:
+                    threading.Thread(target=DOWNLOAD_MGR._download_worker, daemon=True).start()
+                self.send_json({"status": "success", "retried": retried})
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
             return
 
         self.send_response(404)
