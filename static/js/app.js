@@ -15,6 +15,21 @@
       if (tabs) tabs.style.display = displayVal;
     }
 
+    function updateScrollState() {
+      const q = document.getElementById('search-box')?.value.trim() || '';
+      const detailPanel = document.getElementById('detail-panel');
+      const isDetailsOpen = detailPanel && detailPanel.style.display === 'flex';
+      const isHomeActive = (activeTab === 'search') && !isDetailsOpen && (q.length < 2);
+      
+      if (isHomeActive) {
+        document.documentElement.classList.add('home-page-active');
+        document.body.classList.add('home-page-active');
+      } else {
+        document.documentElement.classList.remove('home-page-active');
+        document.body.classList.remove('home-page-active');
+      }
+    }
+
     function getOrCreateClientId() {
       let id = localStorage.getItem('moviescrackd_client_id');
       if (!id) {
@@ -105,6 +120,7 @@
 
       // Fetch and render trending showcase marquee on home page
       fetchAndRenderTrendingShowcase();
+      updateScrollState();
     });
 
     function goHome() {
@@ -140,6 +156,7 @@
         document.getElementById('direct-back-row').style.display = 'none';
         document.querySelector('.direct-input-row').style.display = 'flex';
       }
+      updateScrollState();
     }
 
     // ── Showcase Marquee API & Rendering ──
@@ -534,6 +551,7 @@
       
       if (q.length < 2) {
         filterShowcaseByCategory(cat);
+        updateScrollState();
         return;
       }
       
@@ -544,6 +562,7 @@
         // Otherwise trigger a new search
         triggerSearch();
       }
+      updateScrollState();
     }
 
     function filterAndRenderResultsLocally(query) {
@@ -1101,6 +1120,7 @@
           resultsDiv.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px;">Connection closed.</div>';
         }
       };
+      updateScrollState();
     }
 
     function getRelevanceScore(title, query, category) {
@@ -1505,6 +1525,8 @@
         </div>
       `).join('');
 
+      updateScrollState();
+
       fetch(`/api/detail?url=${encodeURIComponent(item.url)}`)
         .then(r => r.json())
         .then(data => {
@@ -1802,6 +1824,7 @@
       document.getElementById('detail-panel').style.display = 'none';
       const q = document.getElementById('search-box').value.trim();
       document.getElementById('search-results').style.display = q.length < 2 ? 'block' : 'grid';
+      updateScrollState();
     }
 
     function showDirectFromDetails() {
@@ -1818,6 +1841,7 @@
       
       // Show the premium back button
       document.getElementById('direct-back-row').style.display = 'block';
+      updateScrollState();
     }
 
     function goBackToMovie() {
@@ -1837,6 +1861,7 @@
       setTabsDisplay('none');
 
       clearDirectDownloadsState();
+      updateScrollState();
     }
 
     // Download API communication handlers
