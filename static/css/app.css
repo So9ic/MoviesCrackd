@@ -553,41 +553,25 @@
       transition: none !important;
     }
 
-    .skeleton-img,
-    .skeleton-text {
-      position: relative;
-      overflow: hidden;
-      background: #12121e;
-    }
-
     .skeleton-img {
       width: 100%;
       height: 100%;
+      background: linear-gradient(90deg, #13131f 25%, #1c1c2e 50%, #13131f 75%);
+      background-size: 200% 100%;
+      animation: pulse 1.5s infinite;
     }
 
     .skeleton-text {
       height: 14px;
+      background: linear-gradient(90deg, #13131f 25%, #1c1c2e 50%, #13131f 75%);
+      background-size: 200% 100%;
+      animation: pulse 1.5s infinite;
       border-radius: 4px;
     }
 
-    /* GPU-accelerated compositor shimmer (zero-repaint, main thread independent) */
-    .skeleton-img::after,
-    .skeleton-text::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.06) 50%, transparent 100%);
-      animation: gpu-shimmer 1.4s infinite linear;
-      transform: translate3d(-100%, 0, 0);
-      will-change: transform;
-    }
-
-    @keyframes gpu-shimmer {
-      0% { transform: translate3d(-100%, 0, 0); }
-      100% { transform: translate3d(100%, 0, 0); }
+    @keyframes pulse {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
     }
 
     /* CSS-only skeleton marquee scroll (runs before any JS loads) */
@@ -1916,21 +1900,6 @@
     .trending-showcase-container.active .movie-card.static-overlay {
       opacity: 1 !important;
       transform: scale(1) !important;
-    }
-
-    /* Initial load override: slow opacity-only fade-in (1.2s), no scale changes to blend with skeleton */
-    .initial-loading .trending-showcase-container .movie-card.static-overlay {
-      transform: scale(1) !important;
-      transition: opacity 1.2s ease-in-out !important;
-    }
-    .initial-loading .trending-showcase-container.active .movie-card.static-overlay {
-      opacity: 1 !important;
-      transform: scale(1) !important;
-    }
-
-    /* Disable drag/hover interaction on the row wrappers during the initial 1.2s load transition to prevent offset/hover-pause mismatches */
-    .initial-loading .marquee-row-wrapper {
-      pointer-events: none !important;
     }
 
     /* Stagger the rows slightly for a fluid wave effect */

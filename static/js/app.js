@@ -204,7 +204,7 @@
 
         if (filteredMovies.length === 0) {
           bakedContainersHtml += `
-            <div class="trending-showcase-container" data-showcase-category="${cat}" data-scrolling="false">
+            <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
               <div style="text-align: center; color: var(--text-dim); padding: 60px 40px; width: 100vw;">
                 No trending titles available in this category.
               </div>
@@ -269,7 +269,7 @@
         }
 
         bakedContainersHtml += `
-          <div class="trending-showcase-container" data-showcase-category="${cat}" data-scrolling="false">
+          <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
             ${rowsHtml}
           </div>
         `;
@@ -300,34 +300,7 @@
         }
       });
 
-      let wrapper = resultsDiv.querySelector('.showcase-fade-wrapper');
-      if (!wrapper) {
-        resultsDiv.innerHTML = `<div class="showcase-fade-wrapper"></div>`;
-        wrapper = resultsDiv.querySelector('.showcase-fade-wrapper');
-      }
-
-      // Remove any existing real category containers (if this is a re-render)
-      wrapper.querySelectorAll('.trending-showcase-container:not(.skeleton-container)').forEach(el => el.remove());
-
-      // Append new containers to wrapper
-      wrapper.insertAdjacentHTML('beforeend', bakedContainersHtml);
-
-      // Trigger the entrance scale/fade animation in the next frame
-      requestAnimationFrame(() => {
-        const activeContainer = resultsDiv.querySelector(`.trending-showcase-container:not(.skeleton-container)[data-showcase-category="${currentCategory}"]`);
-        if (activeContainer) {
-          void activeContainer.offsetHeight; // Force layout reflow to register initial styles
-          activeContainer.classList.add('active');
-          activeContainer.dataset.scrolling = 'true';
-          
-          // Clean up initial-loading class and remove skeleton container after the initial 1.2s fade completes
-          setTimeout(() => {
-            resultsDiv.classList.remove('initial-loading');
-            const skeleton = wrapper.querySelector('.skeleton-container');
-            if (skeleton) skeleton.remove();
-          }, 1200);
-        }
-      });
+      resultsDiv.innerHTML = `<div class="showcase-fade-wrapper">${bakedContainersHtml}</div>`;
 
       // Initialize dynamic high-performance interactive marquees!
       initInteractiveMarquees();
@@ -349,7 +322,7 @@
 
       // Cache hover-device detection once (doesn't change at runtime)
       const isHoverDevice = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-      const tracks = document.querySelectorAll('.trending-showcase-container:not(.skeleton-container) .marquee-track');
+      const tracks = document.querySelectorAll('.marquee-track');
       tracks.forEach(track => {
         // Prevent duplicate initialization
         if (track.dataset.initialized) return;
