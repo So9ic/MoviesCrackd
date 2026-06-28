@@ -314,7 +314,7 @@
 
       // Trigger the entrance scale/fade animation in the next frame
       requestAnimationFrame(() => {
-        const activeContainer = resultsDiv.querySelector(`.trending-showcase-container[data-showcase-category="${currentCategory}"]`);
+        const activeContainer = resultsDiv.querySelector(`.trending-showcase-container:not(.skeleton-container)[data-showcase-category="${currentCategory}"]`);
         if (activeContainer) {
           void activeContainer.offsetHeight; // Force layout reflow to register initial styles
           activeContainer.classList.add('active');
