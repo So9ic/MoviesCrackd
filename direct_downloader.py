@@ -75,12 +75,13 @@ _DS_CACHE_TTL = 900  # 15 minutes
 
 
 def _ds_cache_key(url: str) -> str:
-    """Extract a stable cache key from a driveseed URL (the path part)."""
+    """Extract a stable cache key from a driveseed URL including netloc, path, and query to prevent collisions."""
     try:
         parsed = urlparse(url)
-        return parsed.path.rstrip('/')
+        # Use netloc, path, and query to uniquely identify the page
+        return f"{parsed.netloc}{parsed.path}?{parsed.query}".rstrip('?/')
     except Exception:
-        return url
+        return url.strip()
 
 
 def _ds_cache_get(key: str):
