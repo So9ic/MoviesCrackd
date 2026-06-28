@@ -778,7 +778,16 @@ class DownloaderBackend:
         card.url = item["download_url"]
 
         if fname in existing:
-            card.set_detail("Already downloaded")
+            file_path = os.path.join(state.output_dir, fname)
+            size_str = ""
+            try:
+                actual_size = os.path.getsize(file_path)
+                size_str = f" • {fmt_bytes(actual_size)}"
+            except Exception:
+                exp = item.get("expected_size_bytes")
+                if exp:
+                    size_str = f" • {fmt_bytes(exp)}"
+            card.set_detail(f"Already downloaded{size_str}")
             card.mark_done()
             with self._lock:
                 if state.generation == generation:
@@ -854,6 +863,15 @@ class DownloaderBackend:
 
             existing = set(os.listdir(state.output_dir)) if os.path.isdir(state.output_dir) else set()
             if fname in existing:
+                file_path = os.path.join(state.output_dir, fname)
+                size_str = ""
+                try:
+                    actual_size = os.path.getsize(file_path)
+                    size_str = f" • {fmt_bytes(actual_size)}"
+                except Exception:
+                    if meta_size:
+                        size_str = f" • {fmt_bytes(meta_size)}"
+                card.set_detail(f"Already downloaded{size_str}")
                 card.mark_done()
                 with self._lock:
                     if state.generation == generation:
@@ -1253,7 +1271,16 @@ class DownloaderBackend:
 
                 existing = set(os.listdir(state.output_dir)) if os.path.isdir(state.output_dir) else set()
                 if item["filename"] in existing:
-                    card.set_detail("Already downloaded")
+                    file_path = os.path.join(state.output_dir, item["filename"])
+                    size_str = ""
+                    try:
+                        actual_size = os.path.getsize(file_path)
+                        size_str = f" • {fmt_bytes(actual_size)}"
+                    except Exception:
+                        exp = item.get("expected_size_bytes")
+                        if exp:
+                            size_str = f" • {fmt_bytes(exp)}"
+                    card.set_detail(f"Already downloaded{size_str}")
                     card.mark_done()
                     with self._lock:
                         if state.generation == generation:

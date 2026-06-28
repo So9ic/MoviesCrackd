@@ -528,7 +528,14 @@ def resolve_driveseed(driveseed_url: str, retries: int = 2) -> tuple[str, str | 
                 try:
                     zfile_resp = SESSION.get(zfile_url, timeout=12)
                     zfile_resp.raise_for_status()
-                    html += "\n" + zfile_resp.text
+                    z_html = zfile_resp.text
+                    html += "\n" + z_html
+                    # Try to extract updated name/size from zfile HTML
+                    z_fname, z_size = _extract_filename_and_size(z_html)
+                    if z_fname and not filename:
+                        filename = z_fname
+                    if z_size is not None and size_bytes is None:
+                        size_bytes = z_size
                 except Exception:
                     pass
 
