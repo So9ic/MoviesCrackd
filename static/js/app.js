@@ -204,7 +204,7 @@
 
         if (filteredMovies.length === 0) {
           bakedContainersHtml += `
-            <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
+            <div class="trending-showcase-container" data-showcase-category="${cat}" data-scrolling="false">
               <div style="text-align: center; color: var(--text-dim); padding: 60px 40px; width: 100vw;">
                 No trending titles available in this category.
               </div>
@@ -269,7 +269,7 @@
         }
 
         bakedContainersHtml += `
-          <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
+          <div class="trending-showcase-container" data-showcase-category="${cat}" data-scrolling="false">
             ${rowsHtml}
           </div>
         `;
@@ -301,6 +301,15 @@
       });
 
       resultsDiv.innerHTML = `<div class="showcase-fade-wrapper">${bakedContainersHtml}</div>`;
+
+      // Trigger the entrance scale/fade animation in the next frame
+      requestAnimationFrame(() => {
+        const activeContainer = resultsDiv.querySelector(`.trending-showcase-container[data-showcase-category="${currentCategory}"]`);
+        if (activeContainer) {
+          activeContainer.classList.add('active');
+          activeContainer.dataset.scrolling = 'true';
+        }
+      });
 
       // Initialize dynamic high-performance interactive marquees!
       initInteractiveMarquees();
