@@ -1854,8 +1854,8 @@
       
       pointer-events: none;
       visibility: hidden;
-      /* On exit, delay visibility toggle to allow cards to finish fading out (0.6s) */
-      transition: visibility 0s 0.6s;
+      /* On exit, delay visibility toggle to allow cards to finish scaling out (0.8s) */
+      transition: visibility 0s 0.8s;
     }
 
     .trending-showcase-container.active {
@@ -1869,9 +1869,9 @@
     /* Must target .static-overlay to win specificity over line ~1954 */
     .trending-showcase-container .movie-card.static-overlay {
       opacity: 0 !important;
-      transform: scale(0.88) !important;
-      transition: opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1),
-                  transform 0.45s cubic-bezier(0.25, 1, 0.5, 1) !important;
+      transform: scale(0.82) !important;
+      transition: opacity 0.55s ease-out,
+                  transform 0.6s cubic-bezier(0.22, 1, 0.36, 1) !important;
     }
 
     .trending-showcase-container.active .movie-card.static-overlay {
@@ -1881,7 +1881,7 @@
 
     /* Stagger the rows slightly for a fluid wave effect */
     .trending-showcase-container .marquee-row-wrapper:nth-child(2) .movie-card.static-overlay {
-      transition-delay: 80ms;
+      transition-delay: 100ms;
     }
 
     /* Keep hover zoom effects snappy and responsive */
@@ -1890,6 +1890,20 @@
       transition: transform 0.22s cubic-bezier(0.25, 1, 0.5, 1), opacity 0.2s ease !important;
       transition-delay: 0ms !important;
       z-index: 12;
+    }
+
+    /* iOS Low Power Mode / reduced-motion: drop scale, use fast opacity-only fade */
+    @media (prefers-reduced-motion: reduce) {
+      .trending-showcase-container .movie-card.static-overlay {
+        transform: none !important;
+        transition: opacity 0.25s ease !important;
+      }
+      .trending-showcase-container.active .movie-card.static-overlay {
+        transform: none !important;
+      }
+      .trending-showcase-container .marquee-row-wrapper:nth-child(2) .movie-card.static-overlay {
+        transition-delay: 0ms;
+      }
     }
 
     .marquee-row-wrapper {
