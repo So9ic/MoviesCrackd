@@ -1928,8 +1928,8 @@
       transform: scale(1) !important;
     }
 
-    /* Disable drag/hover interaction on the tracks during the initial 1.2s load transition to prevent offset mismatches */
-    .initial-loading .marquee-track {
+    /* Disable drag/hover interaction on the row wrappers during the initial 1.2s load transition to prevent offset/hover-pause mismatches */
+    .initial-loading .marquee-row-wrapper {
       pointer-events: none !important;
     }
 
