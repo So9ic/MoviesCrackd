@@ -814,6 +814,7 @@
       /* Force hardware acceleration and correct border-radius clipping for absolute/filtered children */
       transform: translate3d(0, 0, 0);
       isolation: isolate;
+      -webkit-mask-image: -webkit-radial-gradient(white, black);
     }
 
     .download-card.done {
