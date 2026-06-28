@@ -860,10 +860,17 @@
 
     .dl-progress-liquid.dl-done-fade {
       width: 100% !important;
+      background: linear-gradient(90deg, var(--liquid-color-1) 0%, var(--liquid-color-2) 100%) !important;
       opacity: 0;
       pointer-events: none;
       transition: width 0.4s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 0.6s ease-in-out 0.4s;
     }
+
+    .dl-progress-liquid.dl-done-fade .dl-progress-svg,
+    .dl-progress-liquid.dl-done-fade .dl-particles {
+      display: none;
+    }
+
 
     .dl-progress-liquid.dl-downloading {
       background: none;
