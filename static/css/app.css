@@ -811,6 +811,9 @@
       backdrop-filter: blur(12px);
       position: relative;
       overflow: hidden;
+      /* Force hardware acceleration and correct border-radius clipping for absolute/filtered children */
+      transform: translate3d(0, 0, 0);
+      isolation: isolate;
     }
 
     .download-card.done {
@@ -888,6 +891,8 @@
       z-index: 1;
       transition: width 1.2s cubic-bezier(0.1, 0.8, 0.25, 1); /* super smooth, slow ease-out transition */
       overflow: visible;
+      border-top-left-radius: 13px;
+      border-bottom-left-radius: 13px;
 
       /* CSS variables for default green state */
       --liquid-color-1: #059669;
