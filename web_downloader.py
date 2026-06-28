@@ -572,8 +572,21 @@ class DownloaderBackend:
 
                         # Phase 1: Shortener bypass → get name + driveseed URL
                         card.set_status("Bypassing shortener…")
-                        card.set_progress(0.4)
+                        card.set_progress(0.15)
                         _, name, ds_url = resolve_link(i, link, session=SESSION)
+                        
+                        # Smooth animation for Phase 1 (Shortener bypass)
+                        import random
+                        p1_dur = 0.5 + random.uniform(-0.15, 0.15)
+                        p1_steps = 5
+                        for s in range(p1_steps):
+                            if state_inner.generation != generation:
+                                return
+                            t = (s + 1) / p1_steps
+                            val = 0.15 + (0.45 - 0.15) * t + random.uniform(-0.03, 0.03)
+                            card.set_progress(min(0.48, max(0.15, val)))
+                            time.sleep(p1_dur / p1_steps)
+                        
                         source_link = dict(link) if isinstance(link, dict) else None
 
                         if state_inner.generation != generation:
@@ -612,6 +625,17 @@ class DownloaderBackend:
                                 "source_name_hint": name,
                                 "source_driveseed_url": None,
                             }
+                            # Smooth final fill animation before finalizing
+                            p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                            p3_steps = 4
+                            start_p = card.progress or 0.45
+                            for s in range(p3_steps):
+                                if state_inner.generation != generation:
+                                    return
+                                t = (s + 1) / p3_steps
+                                val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                                card.set_progress(min(0.99, max(start_p, val)))
+                                time.sleep(p3_dur / p3_steps)
                             self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                             return  # Success!
 
@@ -632,6 +656,17 @@ class DownloaderBackend:
                                 "source_name_hint": name,
                                 "source_driveseed_url": None,
                             }
+                            # Smooth final fill animation before finalizing
+                            p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                            p3_steps = 4
+                            start_p = card.progress or 0.45
+                            for s in range(p3_steps):
+                                if state_inner.generation != generation:
+                                    return
+                                t = (s + 1) / p3_steps
+                                val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                                card.set_progress(min(0.99, max(start_p, val)))
+                                time.sleep(p3_dur / p3_steps)
                             self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                             return  # Success!
 
@@ -642,9 +677,20 @@ class DownloaderBackend:
 
                         # Phase 2: Driveseed resolution → unified single-fetch for metadata + download URL
                         card.set_status("Resolving driveseed…")
-                        card.set_progress(0.8)
-
                         dl_url, ds_fname, ds_size, method = resolve_driveseed(ds_url)
+                        
+                        # Smooth animation for Phase 2
+                        p2_dur = 0.5 + random.uniform(-0.15, 0.15)
+                        p2_steps = 5
+                        start_p = card.progress or 0.45
+                        for s in range(p2_steps):
+                            if state_inner.generation != generation:
+                                return
+                            t = (s + 1) / p2_steps
+                            val = start_p + (0.80 - start_p) * t + random.uniform(-0.03, 0.03)
+                            card.set_progress(min(0.83, max(start_p, val)))
+                            time.sleep(p2_dur / p2_steps)
+
                         meta_size = ds_size or expected_size
                         fname = ds_fname or name or os.path.basename(urlparse(dl_url).path) or f"download_{i + 1}"
                         fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
@@ -662,6 +708,19 @@ class DownloaderBackend:
                             "source_name_hint": name,
                             "source_driveseed_url": ds_url,
                         }
+                        
+                        # Phase 3: Final fill animation before finalizing
+                        p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                        p3_steps = 4
+                        start_p = card.progress or 0.80
+                        for s in range(p3_steps):
+                            if state_inner.generation != generation:
+                                return
+                            t = (s + 1) / p3_steps
+                            val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                            card.set_progress(min(0.99, max(start_p, val)))
+                            time.sleep(p3_dur / p3_steps)
+
                         self._finalize_card(card, i, item, existing, workers_started, workers_lock, client_id, generation)
                         return  # Success!
 
@@ -763,6 +822,17 @@ class DownloaderBackend:
             if not fname:
                 fname = os.path.basename(urlparse(dl_url).path) or "download_1"
             fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
+            
+            # Smooth animation for direct driveseed url resolution (Phase 2 & 3)
+            import random
+            p2_dur = 0.8 + random.uniform(-0.2, 0.2)
+            p2_steps = 8
+            for s in range(p2_steps):
+                if state.generation == generation:
+                    t = (s + 1) / p2_steps
+                    val = 0.15 + (0.98 - 0.15) * t + random.uniform(-0.03, 0.03)
+                    card.set_progress(min(0.99, max(0.15, val)))
+                    time.sleep(p2_dur / p2_steps)
             
             item = {
                 "client_id": client_id,
@@ -1051,8 +1121,21 @@ class DownloaderBackend:
         def _task():
             try:
                 card.set_status("Bypassing shortener…")
-                card.set_progress(0.4)
+                card.set_progress(0.15)
                 _, name, ds_url = resolve_link(idx, link, session=SESSION)
+                
+                # Smooth animation for Phase 1 (Shortener bypass)
+                import random
+                p1_dur = 0.5 + random.uniform(-0.15, 0.15)
+                p1_steps = 5
+                for s in range(p1_steps):
+                    if state.generation != generation:
+                        return
+                    t = (s + 1) / p1_steps
+                    val = 0.15 + (0.45 - 0.15) * t + random.uniform(-0.03, 0.03)
+                    card.set_progress(min(0.48, max(0.15, val)))
+                    time.sleep(p1_dur / p1_steps)
+                
                 source_link = dict(link) if isinstance(link, dict) else None
                 size_hint = parse_size_hint_bytes(name)
                 origin_url = link.get("url", "") if isinstance(link, dict) else ""
@@ -1078,6 +1161,17 @@ class DownloaderBackend:
                         "source_name_hint": name,
                         "source_driveseed_url": None,
                     }
+                    # Smooth final fill animation before finalizing
+                    p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                    p3_steps = 4
+                    start_p = card.progress or 0.45
+                    for s in range(p3_steps):
+                        if state.generation != generation:
+                            return
+                        t = (s + 1) / p3_steps
+                        val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                        card.set_progress(min(0.99, max(start_p, val)))
+                        time.sleep(p3_dur / p3_steps)
                 elif ds_url and ".r2.dev/" in ds_url:
                     fname = os.path.basename(urlparse(ds_url).path) or name or f"download_{idx + 1}"
                     fname = re.sub(r'[<>:"/\\|?*]', "_", fname)
@@ -1094,11 +1188,34 @@ class DownloaderBackend:
                         "source_name_hint": name,
                         "source_driveseed_url": None,
                     }
+                    # Smooth final fill animation before finalizing
+                    p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                    p3_steps = 4
+                    start_p = card.progress or 0.45
+                    for s in range(p3_steps):
+                        if state.generation != generation:
+                            return
+                        t = (s + 1) / p3_steps
+                        val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                        card.set_progress(min(0.99, max(start_p, val)))
+                        time.sleep(p3_dur / p3_steps)
                 elif not ds_url or "driveseed.org" not in ds_url:
                     raise ValueError("Not a driveseed link")
                 else:
                     card.set_status("Resolving driveseed…")
-                    card.set_progress(0.8)
+                    
+                    # Smooth animation for Phase 2
+                    p2_dur = 0.5 + random.uniform(-0.15, 0.15)
+                    p2_steps = 5
+                    start_p = card.progress or 0.45
+                    for s in range(p2_steps):
+                        if state.generation != generation:
+                            return
+                        t = (s + 1) / p2_steps
+                        val = start_p + (0.80 - start_p) * t + random.uniform(-0.03, 0.03)
+                        card.set_progress(min(0.83, max(start_p, val)))
+                        time.sleep(p2_dur / p2_steps)
+
                     dl_url, ds_fname, ds_size, method = resolve_driveseed(ds_url)
                     meta_size = ds_size or expected_size
                     fname = ds_fname or name or os.path.basename(urlparse(dl_url).path) or f"download_{idx + 1}"
@@ -1116,6 +1233,18 @@ class DownloaderBackend:
                         "source_name_hint": name,
                         "source_driveseed_url": ds_url,
                     }
+                    
+                    # Phase 3: Final fill animation before finalizing
+                    p3_dur = 0.4 + random.uniform(-0.1, 0.1)
+                    p3_steps = 4
+                    start_p = card.progress or 0.80
+                    for s in range(p3_steps):
+                        if state.generation != generation:
+                            return
+                        t = (s + 1) / p3_steps
+                        val = start_p + (0.98 - start_p) * t + random.uniform(-0.02, 0.02)
+                        card.set_progress(min(0.99, max(start_p, val)))
+                        time.sleep(p3_dur / p3_steps)
 
                 card.filename = item["filename"]
                 card.set_method(item.get("method", ""))
