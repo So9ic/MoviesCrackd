@@ -1865,15 +1865,18 @@
       transition: visibility 0s 0s;
     }
 
-    /* Card entrance/exit animations — opacity-only for zero jitter on mobile */
+    /* Card entrance/exit animations with smooth scale */
     /* Must target .static-overlay to win specificity over line ~1954 */
     .trending-showcase-container .movie-card.static-overlay {
       opacity: 0 !important;
-      transition: opacity 0.35s cubic-bezier(0.25, 1, 0.5, 1) !important;
+      transform: scale(0.88) !important;
+      transition: opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+                  transform 0.45s cubic-bezier(0.25, 1, 0.5, 1) !important;
     }
 
     .trending-showcase-container.active .movie-card.static-overlay {
       opacity: 1 !important;
+      transform: scale(1) !important;
     }
 
     /* Stagger the rows slightly for a fluid wave effect */
