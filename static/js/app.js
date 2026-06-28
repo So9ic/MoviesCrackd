@@ -9,6 +9,7 @@
     let lastSearchQuery = '';
     let trendingMoviesList = [];
     let cardProgressCreep = {};
+    let categoryTransitionTimeout = null;
 
     function setTabsDisplay(displayVal) {
       const tabs = document.querySelector('.tabs-container');
@@ -211,19 +212,46 @@
         return;
       }
 
+      // Filter based on active category
+      let filteredMovies = [];
+      if (currentCategory === 'All') {
+        filteredMovies = [...trendingMoviesList];
+      } else {
+        filteredMovies = trendingMoviesList.filter(movie => {
+          const cat = movie.category;
+          return cat === currentCategory.toUpperCase() || (currentCategory === 'Anime' && cat === 'ANIMEFLIX');
+        });
+      }
+
+      if (filteredMovies.length === 0) {
+        resultsDiv.innerHTML = `
+          <div class="trending-showcase-container" style="text-align: center; color: var(--text-dim); padding: 40px;">
+            No trending titles available in this category.
+          </div>
+        `;
+        return;
+      }
+
       // Split into 2 rows
       const rowCount = 2;
-      const moviesPerRow = Math.ceil(trendingMoviesList.length / rowCount);
+      const moviesPerRow = Math.ceil(filteredMovies.length / rowCount);
       let rowsHtml = '';
 
       for (let r = 0; r < rowCount; r++) {
         const start = r * moviesPerRow;
-        const rowMovies = trendingMoviesList.slice(start, start + moviesPerRow);
+        const rowMovies = filteredMovies.slice(start, start + moviesPerRow);
         if (rowMovies.length === 0) continue;
 
         const direction = (r % 2 === 0) ? 'left' : 'right';
         
-        const cardsHtml = rowMovies.map(movie => {
+        // Ensure there are at least 10 cards per group to avoid infinite loop gaps on wide screens
+        const repeatCount = Math.max(1, Math.ceil(10 / rowMovies.length));
+        const finalRowMovies = [];
+        for (let i = 0; i < repeatCount; i++) {
+          finalRowMovies.push(...rowMovies);
+        }
+
+        const cardsHtml = finalRowMovies.map(movie => {
           const catClass = movie.category.toLowerCase() === 'animeflix' ? 'anime' : movie.category.toLowerCase();
           const categoryBadge = `<span class="cat-badge ${catClass}">${movie.category === 'ANIMEFLIX' ? 'ANIME' : movie.category}</span>`;
           
@@ -265,9 +293,6 @@
         </div>
       `;
 
-      // Apply current category filter if one is active
-      filterShowcaseByCategory(currentCategory);
-      
       // Initialize dynamic high-performance interactive marquees!
       initInteractiveMarquees();
     }
@@ -541,6 +566,11 @@
     }
 
     function selectCategory(cat) {
+      if (categoryTransitionTimeout) {
+        clearTimeout(categoryTransitionTimeout);
+        categoryTransitionTimeout = null;
+      }
+
       currentCategory = cat;
       document.querySelectorAll('.cat-btn').forEach(btn => {
         btn.classList.remove('active');
@@ -550,8 +580,22 @@
       const q = document.getElementById('search-box').value.trim();
       
       if (q.length < 2) {
+        // 1. Smoothly animate out non-matching cards
         filterShowcaseByCategory(cat);
         updateScrollState();
+
+        // 2. Fade out the track row wrappers smoothly
+        const wrappers = document.querySelectorAll('.marquee-row-wrapper');
+        wrappers.forEach(w => {
+          w.style.transition = 'opacity 0.25s cubic-bezier(0.25, 1, 0.5, 1)';
+          w.style.opacity = '0';
+        });
+
+        // 3. Rebuild the tracks with category set only and re-initialize physics loops
+        categoryTransitionTimeout = setTimeout(() => {
+          renderTrendingShowcase();
+          categoryTransitionTimeout = null;
+        }, 300);
         return;
       }
       
