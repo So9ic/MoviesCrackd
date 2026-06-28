@@ -581,12 +581,12 @@
     }
 
     .marquee-track.skeleton-scroll-left {
-      animation: skeleton-scroll 30s linear infinite;
+      animation: skeleton-scroll 42.5s linear infinite;
       will-change: transform;
     }
 
     .marquee-track.skeleton-scroll-right {
-      animation: skeleton-scroll 30s linear infinite reverse;
+      animation: skeleton-scroll 42.5s linear infinite reverse;
       will-change: transform;
     }
 
@@ -2138,6 +2138,10 @@
       }
       .marquee-track {
         gap: 12px !important;
+      }
+      .marquee-track.skeleton-scroll-left,
+      .marquee-track.skeleton-scroll-right {
+        animation-duration: 27.5s !important;
       }
       .marquee-group {
         gap: 12px !important;
