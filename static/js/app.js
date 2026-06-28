@@ -104,7 +104,7 @@
       // Forcefully prevent double-tap-to-zoom gestures on mobile devices
       let lastTouchEnd = 0;
       document.addEventListener('touchend', (event) => {
-        const now = (new Date()).getTime();
+        const now = Date.now();
         if (now - lastTouchEnd <= 300) {
           event.preventDefault();
         }
@@ -309,16 +309,7 @@
       initInteractiveMarquees();
     }
 
-    function filterShowcaseByCategory(category) {
-      document.querySelectorAll('.movie-card.static-overlay').forEach(card => {
-        const cat = card.getAttribute('data-category');
-        if (category === 'All' || cat === category.toUpperCase() || (category === 'Anime' && cat === 'ANIMEFLIX')) {
-          card.classList.remove('hidden-card');
-        } else {
-          card.classList.add('hidden-card');
-        }
-      });
-    }
+
 
     function toggleMarqueePause(track) {
       track.classList.toggle('paused');
@@ -378,12 +369,12 @@
 
         // Cache wrap distance — recalculate only on resize, not every frame
         // Detects actual CSS gap dynamically based on mobile layout rules
+        // Cache the marquee-group element once (never changes after init)
+        const cachedGroup = track.querySelector('.marquee-group');
         function measureWrapDist() {
-          if (!track.isConnected) return;
-          const group = track.querySelector('.marquee-group');
-          if (!group) { cachedWrapDist = 0; return; }
+          if (!track.isConnected || !cachedGroup) { cachedWrapDist = 0; return; }
           const gap = window.innerWidth <= 768 ? 12 : 24;
-          cachedWrapDist = group.offsetWidth + gap;
+          cachedWrapDist = cachedGroup.offsetWidth + gap;
         }
         
         // Debounce resize listener to prevent layout thrashing on window resize
