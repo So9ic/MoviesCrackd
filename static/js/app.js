@@ -183,35 +183,7 @@
       resultsDiv.style.display = 'block';
 
       if (!trendingMoviesList || trendingMoviesList.length === 0) {
-        // Render 2 skeleton marquee rows while fetching
-        let rowsHtml = '';
-        for (let r = 0; r < 2; r++) {
-          const direction = (r % 2 === 0) ? 'left' : 'right';
-          const skeletonsHtml = Array.from({length: 8}).map(() => `
-            <div class="movie-card static-overlay skeleton-card" style="border: none;">
-              <div class="poster-wrap">
-                <div class="skeleton-img"></div>
-              </div>
-            </div>
-          `).join('');
-          
-          rowsHtml += `
-            <div class="marquee-row-wrapper">
-              <div class="marquee-track ${direction}">
-                <div class="marquee-group">${skeletonsHtml}</div>
-                <div class="marquee-group">${skeletonsHtml}</div>
-              </div>
-            </div>
-          `;
-        }
-        resultsDiv.innerHTML = `
-          <div class="showcase-fade-wrapper">
-            <div class="trending-showcase-container active" data-showcase-category="All" data-scrolling="true">
-              ${rowsHtml}
-            </div>
-          </div>
-        `;
-        return;
+        return; // HTML-baked skeleton is already visible
       }
 
       const categoriesToBake = ['All', 'Hollywood', 'Bollywood', 'Anime'];

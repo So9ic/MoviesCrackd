@@ -66,10 +66,37 @@
         <button class="cat-btn" onclick="selectCategory('Anime')">Anime</button>
       </div>
 
-      <!-- Search Results Movie Card Grid -->
-      <div class="movie-grid" id="search-results">
-        <!-- Renders dynamically -->
+      <!-- Search Results Movie Card Grid (pre-baked skeleton for instant layout) -->
+      <div class="movie-grid" id="search-results" style="display: block;">
+        <div class="showcase-fade-wrapper">
+          <div class="trending-showcase-container active" data-showcase-category="All" data-scrolling="false">
+            <div class="marquee-row-wrapper visible">
+              <div class="marquee-track left">
+                <div class="marquee-group" id="skeleton-group-1"></div>
+                <div class="marquee-group" id="skeleton-group-2"></div>
+              </div>
+            </div>
+            <div class="marquee-row-wrapper visible">
+              <div class="marquee-track right">
+                <div class="marquee-group" id="skeleton-group-3"></div>
+                <div class="marquee-group" id="skeleton-group-4"></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
+      <script>
+        // Immediately inject skeleton cards (runs synchronously, no DOMContentLoaded wait)
+        (function() {
+          var skeletonCard = '<div class="movie-card static-overlay skeleton-card" style="border:none;"><div class="poster-wrap"><div class="skeleton-img"></div></div></div>';
+          var batch = '';
+          for (var i = 0; i < 10; i++) batch += skeletonCard;
+          var ids = ['skeleton-group-1','skeleton-group-2','skeleton-group-3','skeleton-group-4'];
+          for (var j = 0; j < ids.length; j++) {
+            document.getElementById(ids[j]).innerHTML = batch;
+          }
+        })();
+      </script>
 
       <!-- same page detailed quality selection container -->
       <div class="detail-panel" id="detail-panel">

@@ -546,6 +546,13 @@
       pointer-events: none;
     }
 
+    /* Skeleton cards must bypass showcase opacity/transform transitions — always visible on load */
+    .trending-showcase-container .movie-card.static-overlay.skeleton-card {
+      opacity: 1 !important;
+      transform: none !important;
+      transition: none !important;
+    }
+
     .skeleton-img {
       width: 100%;
       height: 100%;
