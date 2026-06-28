@@ -1974,7 +1974,6 @@
       }
 
       // Render with 0% width initially, and store the target width in data-target-width to animate it
-      const clipId = `liquid-clip-${dl.index}`;
       const gradId = `liquid-grad-${dl.index}`;
       const liquidProgress = (dl.state === 0 || dl.state === 1) 
         ? `<div class="dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}" style="width: 0%;" data-target-width="${displayedProgress * 100}">
@@ -1984,22 +1983,12 @@
                    <stop offset="0%" stop-color="var(--liquid-color-1)" />
                    <stop offset="100%" stop-color="var(--liquid-color-2)" />
                  </linearGradient>
-                 <clipPath id="${clipId}">
-                   <path d="M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z">
-                     <animate attributeName="d" dur="3s" repeatCount="indefinite"
-                       values="
-                         M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z;
-                         M 0,0 L 1960,0 C 1940,0 1930,5 1930,12 C 1930,19 2000,22 2000,30 C 2000,38 1930,41 1930,48 C 1930,55 1940,60 1960,60 L 0,60 Z;
-                         M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z
-                       " />
-                   </path>
-                 </clipPath>
                </defs>
-               <g clip-path="url(#${clipId})">
-                 <rect x="0" y="0" width="2000" height="60" fill="url(#${gradId})" />
-                 <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
-                 <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
-               </g>
+               <path class="vertical-wave-path vertical-wave-1" d="M 0,-120 L 1940,-120 Q 1948,-105 1940,-90 T 1940,-60 T 1940,-30 T 1940,0 T 1940,30 T 1940,60 T 1940,90 T 1940,120 T 1940,150 T 1940,180 L 0,180 Z" fill="url(#${gradId})" />
+               <path class="vertical-wave-path vertical-wave-2" d="M 0,-120 L 1970,-120 Q 1980,-105 1970,-90 T 1970,-60 T 1970,-30 T 1970,0 T 1970,30 T 1970,60 T 1970,90 T 1970,120 T 1970,150 T 1970,180 L 0,180 Z" fill="var(--wave-color-1)" />
+               <path class="vertical-wave-path vertical-wave-3" d="M 0,-120 L 2000,-120 Q 2012,-105 2000,-90 T 2000,-60 T 2000,-30 T 2000,0 T 2000,30 T 2000,60 T 2000,90 T 2000,120 T 2000,150 T 2000,180 L 0,180 Z" fill="var(--wave-color-2)" />
+               <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
+               <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
              </svg>
              <div class="dl-particles">
                <div class="dl-particle dl-particle-1"></div>
@@ -2111,7 +2100,6 @@
                 const progressDiv = document.createElement('div');
                 progressDiv.className = `dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}`;
                 progressDiv.style.width = '0%';
-                const clipId = `liquid-clip-${dl.index}`;
                 const gradId = `liquid-grad-${dl.index}`;
                 progressDiv.innerHTML = `
                   <svg class="dl-progress-svg" width="2000" height="100%" viewBox="0 0 2000 60" preserveAspectRatio="none">
@@ -2120,22 +2108,12 @@
                         <stop offset="0%" stop-color="var(--liquid-color-1)" />
                         <stop offset="100%" stop-color="var(--liquid-color-2)" />
                       </linearGradient>
-                      <clipPath id="${clipId}">
-                        <path d="M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z">
-                          <animate attributeName="d" dur="3s" repeatCount="indefinite"
-                            values="
-                              M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z;
-                              M 0,0 L 1960,0 C 1940,0 1930,5 1930,12 C 1930,19 2000,22 2000,30 C 2000,38 1930,41 1930,48 C 1930,55 1940,60 1960,60 L 0,60 Z;
-                              M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z
-                            " />
-                        </path>
-                      </clipPath>
                     </defs>
-                    <g clip-path="url(#${clipId})">
-                      <rect x="0" y="0" width="2000" height="60" fill="url(#${gradId})" />
-                      <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
-                      <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
-                    </g>
+                    <path class="vertical-wave-path vertical-wave-1" d="M 0,-120 L 1940,-120 Q 1948,-105 1940,-90 T 1940,-60 T 1940,-30 T 1940,0 T 1940,30 T 1940,60 T 1940,90 T 1940,120 T 1940,150 T 1940,180 L 0,180 Z" fill="url(#${gradId})" />
+                    <path class="vertical-wave-path vertical-wave-2" d="M 0,-120 L 1970,-120 Q 1980,-105 1970,-90 T 1970,-60 T 1970,-30 T 1970,0 T 1970,30 T 1970,60 T 1970,90 T 1970,120 T 1970,150 T 1970,180 L 0,180 Z" fill="var(--wave-color-1)" />
+                    <path class="vertical-wave-path vertical-wave-3" d="M 0,-120 L 2000,-120 Q 2012,-105 2000,-90 T 2000,-60 T 2000,-30 T 2000,0 T 2000,30 T 2000,60 T 2000,90 T 2000,120 T 2000,150 T 2000,180 L 0,180 Z" fill="var(--wave-color-2)" />
+                    <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
+                    <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
                   </svg>
                   <div class="dl-particles">
                     <div class="dl-particle dl-particle-1"></div>
@@ -2274,7 +2252,6 @@
           progressDiv.className = 'dl-progress-liquid';
           progressDiv.style.width = '0%';
           const dlIndex = index + 1;
-          const clipId = `liquid-clip-${dlIndex}`;
           const gradId = `liquid-grad-${dlIndex}`;
           progressDiv.innerHTML = `
             <svg class="dl-progress-svg" width="2000" height="100%" viewBox="0 0 2000 60" preserveAspectRatio="none">
@@ -2283,22 +2260,12 @@
                   <stop offset="0%" stop-color="var(--liquid-color-1)" />
                   <stop offset="100%" stop-color="var(--liquid-color-2)" />
                 </linearGradient>
-                <clipPath id="${clipId}">
-                  <path d="M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z">
-                    <animate attributeName="d" dur="3s" repeatCount="indefinite"
-                      values="
-                        M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z;
-                        M 0,0 L 1960,0 C 1940,0 1930,5 1930,12 C 1930,19 2000,22 2000,30 C 2000,38 1930,41 1930,48 C 1930,55 1940,60 1960,60 L 0,60 Z;
-                        M 0,0 L 1960,0 C 1980,0 2000,5 2000,12 C 2000,19 1930,22 1930,30 C 1930,38 2000,41 2000,48 C 2000,55 1980,60 1960,60 L 0,60 Z
-                      " />
-                  </path>
-                </clipPath>
               </defs>
-              <g clip-path="url(#${clipId})">
-                <rect x="0" y="0" width="2000" height="60" fill="url(#${gradId})" />
-                <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
-                <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
-              </g>
+              <path class="vertical-wave-path vertical-wave-1" d="M 0,-120 L 1940,-120 Q 1948,-105 1940,-90 T 1940,-60 T 1940,-30 T 1940,0 T 1940,30 T 1940,60 T 1940,90 T 1940,120 T 1940,150 T 1940,180 L 0,180 Z" fill="url(#${gradId})" />
+              <path class="vertical-wave-path vertical-wave-2" d="M 0,-120 L 1970,-120 Q 1980,-105 1970,-90 T 1970,-60 T 1970,-30 T 1970,0 T 1970,30 T 1970,60 T 1970,90 T 1970,120 T 1970,150 T 1970,180 L 0,180 Z" fill="var(--wave-color-1)" />
+              <path class="vertical-wave-path vertical-wave-3" d="M 0,-120 L 2000,-120 Q 2012,-105 2000,-90 T 2000,-60 T 2000,-30 T 2000,0 T 2000,30 T 2000,60 T 2000,90 T 2000,120 T 2000,150 T 2000,180 L 0,180 Z" fill="var(--wave-color-2)" />
+              <path class="wave-path wave-1" d="M 0,60 L 0,38 Q 50,28 100,38 T 200,38 T 300,38 T 400,38 T 500,38 T 600,38 T 700,38 T 800,38 T 900,38 T 1000,38 T 1100,38 T 1200,38 T 1300,38 T 1400,38 T 1500,38 T 1600,38 T 1700,38 T 1800,38 T 1900,38 T 2000,38 T 2100,38 T 2200,38 T 2300,38 T 2400,38 L 2400,60 Z" fill="var(--wave-color-1)" />
+              <path class="wave-path wave-2" d="M 0,60 L 0,44 Q 65,36 130,44 T 260,44 T 390,44 T 520,44 T 650,44 T 780,44 T 910,44 T 1040,44 T 1170,44 T 1300,44 T 1430,44 T 1560,44 T 1690,44 T 1820,44 T 1950,44 T 2080,44 T 2210,44 T 2340,44 T 2470,44 T 2600,44 L 2600,60 Z" fill="var(--wave-color-2)" />
             </svg>
             <div class="dl-particles">
               <div class="dl-particle dl-particle-1"></div>

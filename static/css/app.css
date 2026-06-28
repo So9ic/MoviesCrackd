@@ -854,7 +854,7 @@
       --liquid-color-1: #059669;
       --liquid-color-2: #00c853;
       --wave-color-1: rgba(0, 200, 83, 0.35);
-      --wave-color-2: rgba(5, 150, 105, 0.5);
+      --wave-color-2: rgba(0, 200, 83, 0.15); /* less bright towards the right */
       --glow-color: rgba(0, 200, 83, 0.6);
     }
 
@@ -877,7 +877,7 @@
       --liquid-color-1: #2563eb;
       --liquid-color-2: #3b82f6;
       --wave-color-1: rgba(59, 130, 246, 0.35);
-      --wave-color-2: rgba(37, 99, 235, 0.5);
+      --wave-color-2: rgba(59, 130, 246, 0.15); /* less bright towards the right */
       --glow-color: rgba(59, 130, 246, 0.6);
     }
 
@@ -904,6 +904,38 @@
 
     .wave-2 {
       animation: waveFlow2 7s linear infinite;
+    }
+
+    /* Vertical wave path animations at different times/directions */
+    .vertical-wave-path {
+      transform-origin: 50% 50%;
+    }
+
+    .vertical-wave-1 {
+      animation: verticalWave1 3s linear infinite;
+    }
+
+    .vertical-wave-2 {
+      animation: verticalWave2 4.5s linear infinite;
+    }
+
+    .vertical-wave-3 {
+      animation: verticalWave3 6s linear infinite;
+    }
+
+    @keyframes verticalWave1 {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(60px); }
+    }
+
+    @keyframes verticalWave2 {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(-60px); }
+    }
+
+    @keyframes verticalWave3 {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(60px); }
     }
 
     @keyframes waveFlow1 {
