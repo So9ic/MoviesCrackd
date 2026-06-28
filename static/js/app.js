@@ -349,7 +349,7 @@
 
       // Cache hover-device detection once (doesn't change at runtime)
       const isHoverDevice = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-      const tracks = document.querySelectorAll('.marquee-track');
+      const tracks = document.querySelectorAll('.trending-showcase-container:not(.skeleton-container) .marquee-track');
       tracks.forEach(track => {
         // Prevent duplicate initialization
         if (track.dataset.initialized) return;
