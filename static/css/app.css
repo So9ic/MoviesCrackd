@@ -574,6 +574,22 @@
       100% { background-position: -200% 0; }
     }
 
+    /* CSS-only skeleton marquee scroll (runs before any JS loads) */
+    @keyframes skeleton-scroll {
+      from { transform: translate3d(0, 0, 0); }
+      to { transform: translate3d(-50%, 0, 0); }
+    }
+
+    .marquee-track.skeleton-scroll-left {
+      animation: skeleton-scroll 30s linear infinite;
+      will-change: transform;
+    }
+
+    .marquee-track.skeleton-scroll-right {
+      animation: skeleton-scroll 30s linear infinite reverse;
+      will-change: transform;
+    }
+
     /* Same-Page Details / Options Panel */
     .detail-panel {
       display: none;
