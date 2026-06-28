@@ -306,6 +306,7 @@
       requestAnimationFrame(() => {
         const activeContainer = resultsDiv.querySelector(`.trending-showcase-container[data-showcase-category="${currentCategory}"]`);
         if (activeContainer) {
+          void activeContainer.offsetHeight; // Force layout reflow to register initial styles
           activeContainer.classList.add('active');
           activeContainer.dataset.scrolling = 'true';
         }
