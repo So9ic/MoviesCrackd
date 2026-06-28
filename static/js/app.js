@@ -2017,9 +2017,10 @@
 
           let hasFailed = false;
           const currentCards = list.querySelectorAll('.download-card');
+          const hasSkeleton = list.querySelector('.skeleton-card') !== null;
           
-          // If counts don't match, do a full render
-          if (currentCards.length !== data.downloads.length) {
+          // If counts don't match or there are skeleton cards, do a full render
+          if (hasSkeleton || currentCards.length !== data.downloads.length) {
             list.innerHTML = data.downloads.map(dl => {
               if (dl.state === 3) hasFailed = true;
               return renderDownloadCard(dl);

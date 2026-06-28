@@ -462,11 +462,17 @@ class DownloaderBackend:
 
             if not HAS_BATCH:
                 print("[-] Batch module missing")
+                card = VirtualDownloadCard(1, "Error", "ERROR")
+                card.mark_failed("Batch module missing on server")
+                self.cards.append(card)
                 return
 
             links = scrape_links(url)
             if not links:
                 print("[-] No download links found on page")
+                card = VirtualDownloadCard(1, "No links found", "ERROR")
+                card.mark_failed("No download links found on page")
+                self.cards.append(card)
                 return
 
             total = len(links)
@@ -623,6 +629,9 @@ class DownloaderBackend:
 
         except Exception as e:
             print(f"[-] Resolve error: {e}", flush=True)
+            card = VirtualDownloadCard(1, "Error", "ERROR")
+            card.mark_failed(f"Resolution error: {str(e)}")
+            self.cards.append(card)
 
     def _finalize_card(self, card, idx, item, existing, workers_started, workers_lock):
         """
