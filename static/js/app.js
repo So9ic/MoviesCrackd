@@ -300,7 +300,17 @@
         }
       });
 
-      resultsDiv.innerHTML = `<div class="showcase-fade-wrapper">${bakedContainersHtml}</div>`;
+      let wrapper = resultsDiv.querySelector('.showcase-fade-wrapper');
+      if (!wrapper) {
+        resultsDiv.innerHTML = `<div class="showcase-fade-wrapper"></div>`;
+        wrapper = resultsDiv.querySelector('.showcase-fade-wrapper');
+      }
+
+      // Remove any existing real category containers (if this is a re-render)
+      wrapper.querySelectorAll('.trending-showcase-container:not(.skeleton-container)').forEach(el => el.remove());
+
+      // Append new containers to wrapper
+      wrapper.insertAdjacentHTML('beforeend', bakedContainersHtml);
 
       // Trigger the entrance scale/fade animation in the next frame
       requestAnimationFrame(() => {
@@ -310,9 +320,11 @@
           activeContainer.classList.add('active');
           activeContainer.dataset.scrolling = 'true';
           
-          // Clean up initial-loading class after the initial 1.2s fade completes
+          // Clean up initial-loading class and remove skeleton container after the initial 1.2s fade completes
           setTimeout(() => {
             resultsDiv.classList.remove('initial-loading');
+            const skeleton = wrapper.querySelector('.skeleton-container');
+            if (skeleton) skeleton.remove();
           }, 1200);
         }
       });
