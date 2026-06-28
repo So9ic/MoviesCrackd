@@ -275,6 +275,31 @@
         `;
       });
 
+      // Capture current skeleton track positions to avoid mismatch jump
+      window._skeletonOffsets = [];
+      const currentTracks = resultsDiv.querySelectorAll('.marquee-track');
+      currentTracks.forEach(tr => {
+        try {
+          const style = window.getComputedStyle(tr);
+          const matrix = style.transform || style.webkitTransform;
+          if (matrix && matrix !== 'none') {
+            let tx = 0;
+            if (matrix.indexOf('matrix3d') === 0) {
+              const parts = matrix.split('(')[1].split(')')[0].split(',');
+              tx = parseFloat(parts[12]) || 0;
+            } else if (matrix.indexOf('matrix') === 0) {
+              const parts = matrix.split('(')[1].split(')')[0].split(',');
+              tx = parseFloat(parts[4]) || 0;
+            }
+            window._skeletonOffsets.push(tx);
+          } else {
+            window._skeletonOffsets.push(0);
+          }
+        } catch (e) {
+          window._skeletonOffsets.push(0);
+        }
+      });
+
       resultsDiv.innerHTML = `<div class="showcase-fade-wrapper">${bakedContainersHtml}</div>`;
 
       // Initialize dynamic high-performance interactive marquees!
@@ -311,6 +336,13 @@
         const parentContainer = track.closest('.trending-showcase-container');
         
         let x = 0;
+        if (parentContainer && parentContainer.getAttribute('data-showcase-category') === 'All' && window._skeletonOffsets && window._skeletonOffsets.length > 0) {
+          const rows = parentContainer.querySelectorAll('.marquee-track');
+          const rowIndex = Array.from(rows).indexOf(track);
+          if (rowIndex !== -1 && window._skeletonOffsets[rowIndex] !== undefined) {
+            x = window._skeletonOffsets[rowIndex];
+          }
+        }
         let lastRenderedX = NaN; // Track last written x to skip redundant DOM writes
         let velocity = 0;
         let isDragging = false;
@@ -558,6 +590,9 @@
           if (resizeTimeout) clearTimeout(resizeTimeout);
         });
       });
+
+      // Clear the skeleton offsets since they have now been applied to the new tracks
+      window._skeletonOffsets = null;
 
       // Progressively load all remaining off-screen images after 750ms so visible cards get 100% initial bandwidth
       setTimeout(() => {
