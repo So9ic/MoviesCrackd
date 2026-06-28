@@ -1928,6 +1928,11 @@
       transform: scale(1) !important;
     }
 
+    /* Disable drag/hover interaction on the tracks during the initial 1.2s load transition to prevent offset mismatches */
+    .initial-loading .marquee-track {
+      pointer-events: none !important;
+    }
+
     /* Stagger the rows slightly for a fluid wave effect */
     .trending-showcase-container .marquee-row-wrapper:nth-child(2) .movie-card.static-overlay {
       transition-delay: 100ms;
