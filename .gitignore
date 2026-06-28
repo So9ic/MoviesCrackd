@@ -17,3 +17,4 @@ static/search_logs.txt
 static/cached_posters/
 static/trending_cache.json
 .venv/
+.vscode/
