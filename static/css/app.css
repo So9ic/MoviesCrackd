@@ -861,15 +861,29 @@
     .dl-wave-1 {
       position: absolute;
       top: 50%;
-      right: -38px; /* centered on the rightmost edge */
-      width: 76px;
-      height: 76px;
-      margin-top: -38px; /* center vertically */
+      right: -43px; /* centered on the rightmost edge */
+      width: 86px;
+      height: 86px;
+      margin-top: -43px; /* center vertically */
       border-radius: 38% 43% 40% 45%;
       transform-origin: 50% 50%;
       background-color: #00c853; /* matches the bright solid green */
-      animation: waveRotate 5s linear infinite;
+      animation: waveRotate 6s linear infinite;
       z-index: 2;
+    }
+
+    .dl-wave-2 {
+      position: absolute;
+      top: 50%;
+      right: -48px;
+      width: 96px;
+      height: 96px;
+      margin-top: -48px;
+      border-radius: 40% 45% 42% 47%;
+      transform-origin: 50% 50%;
+      background-color: rgba(0, 200, 83, 0.45); /* green translucent */
+      animation: waveRotateOpposite 3.5s linear infinite;
+      z-index: 1;
     }
 
     .dl-progress-liquid.dl-downloading {
@@ -880,9 +894,18 @@
       background-color: #3b82f6; /* matches the bright solid blue */
     }
 
+    .dl-progress-liquid.dl-downloading .dl-wave-2 {
+      background-color: rgba(37, 99, 235, 0.45); /* blue translucent */
+    }
+
     @keyframes waveRotate {
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
+    }
+
+    @keyframes waveRotateOpposite {
+      0% { transform: rotate(360deg); }
+      100% { transform: rotate(0deg); }
     }
 
     .dl-status-compact {

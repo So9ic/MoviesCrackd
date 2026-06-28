@@ -1977,6 +1977,7 @@
       const liquidProgress = (dl.state === 0 || dl.state === 1) 
         ? `<div class="dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}" style="width: 0%;" data-target-width="${displayedProgress * 100}">
              <div class="dl-wave-1"></div>
+             <div class="dl-wave-2"></div>
            </div>` 
         : '';
 
@@ -2026,14 +2027,16 @@
               return renderDownloadCard(dl);
             }).join('');
             
-            // Trigger the smooth slide transition from 0% to the target width!
-            requestAnimationFrame(() => {
-              list.querySelectorAll('.dl-progress-liquid').forEach(bar => {
-                const targetWidth = bar.getAttribute('data-target-width');
-                if (targetWidth) {
-                  bar.style.width = `${targetWidth}%`;
-                }
-              });
+            // Trigger the smooth slide transition from 0% to the target width by forcing a reflow
+            const progressBars = list.querySelectorAll('.dl-progress-liquid');
+            progressBars.forEach(bar => {
+              bar.offsetWidth; // Force layout calculation
+            });
+            progressBars.forEach(bar => {
+              const targetWidth = bar.getAttribute('data-target-width');
+              if (targetWidth) {
+                bar.style.width = `${targetWidth}%`;
+              }
             });
             return;
           }
@@ -2079,13 +2082,13 @@
                 const progressDiv = document.createElement('div');
                 progressDiv.className = `dl-progress-liquid ${dl.state === 1 ? 'dl-downloading' : ''}`;
                 progressDiv.style.width = '0%';
-                progressDiv.innerHTML = '<div class="dl-wave-1"></div>';
+                progressDiv.innerHTML = '<div class="dl-wave-1"></div><div class="dl-wave-2"></div>';
                 cardEl.insertBefore(progressDiv, cardEl.firstChild);
                 progressEl = progressDiv;
-                // Allow browser to register layout before setting width to trigger transition
-                requestAnimationFrame(() => {
-                  progressEl.style.width = `${displayedProgress * 100}%`;
-                });
+                
+                // Force reflow to ensure the transition from 0% is animated smoothly
+                progressEl.offsetWidth;
+                progressEl.style.width = `${displayedProgress * 100}%`;
               } else {
                 progressEl.style.width = `${displayedProgress * 100}%`;
                 if (dl.state === 1) {
@@ -2209,10 +2212,14 @@
           const progressDiv = document.createElement('div');
           progressDiv.className = 'dl-progress-liquid';
           progressDiv.style.width = '0%';
-          progressDiv.innerHTML = '<div class="dl-wave-1"></div>';
+          progressDiv.innerHTML = '<div class="dl-wave-1"></div><div class="dl-wave-2"></div>';
           cardEl.insertBefore(progressDiv, cardEl.firstChild);
-          requestAnimationFrame(() => { progressDiv.style.width = '15%'; });
+          
+          // Force reflow for smooth transition
+          progressDiv.offsetWidth;
+          progressDiv.style.width = '15%';
         } else {
+          progressEl.offsetWidth; // Force reflow
           progressEl.style.width = '15%';
         }
       }
