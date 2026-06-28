@@ -309,6 +309,11 @@
           void activeContainer.offsetHeight; // Force layout reflow to register initial styles
           activeContainer.classList.add('active');
           activeContainer.dataset.scrolling = 'true';
+          
+          // Clean up initial-loading class after the initial 1.2s fade completes
+          setTimeout(() => {
+            resultsDiv.classList.remove('initial-loading');
+          }, 1200);
         }
       });
 
