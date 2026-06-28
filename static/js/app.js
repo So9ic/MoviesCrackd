@@ -205,93 +205,103 @@
           `;
         }
         resultsDiv.innerHTML = `
-          <div class="trending-showcase-container">
+          <div class="trending-showcase-container active" data-showcase-category="All">
             ${rowsHtml}
           </div>
         `;
         return;
       }
 
-      // Filter based on active category
-      let filteredMovies = [];
-      if (currentCategory === 'All') {
-        filteredMovies = [...trendingMoviesList];
-      } else {
-        filteredMovies = trendingMoviesList.filter(movie => {
-          const cat = movie.category;
-          return cat === currentCategory.toUpperCase() || (currentCategory === 'Anime' && cat === 'ANIMEFLIX');
-        });
-      }
+      const categoriesToBake = ['All', 'Hollywood', 'Bollywood', 'Anime'];
+      let bakedContainersHtml = '';
 
-      if (filteredMovies.length === 0) {
-        resultsDiv.innerHTML = `
-          <div class="trending-showcase-container" style="text-align: center; color: var(--text-dim); padding: 40px;">
-            No trending titles available in this category.
-          </div>
-        `;
-        return;
-      }
-
-      // Split into 2 rows
-      const rowCount = 2;
-      const moviesPerRow = Math.ceil(filteredMovies.length / rowCount);
-      let rowsHtml = '';
-
-      for (let r = 0; r < rowCount; r++) {
-        const start = r * moviesPerRow;
-        const rowMovies = filteredMovies.slice(start, start + moviesPerRow);
-        if (rowMovies.length === 0) continue;
-
-        const direction = (r % 2 === 0) ? 'left' : 'right';
-        
-        // Ensure there are at least 10 cards per group to avoid infinite loop gaps on wide screens
-        const repeatCount = Math.max(1, Math.ceil(10 / rowMovies.length));
-        const finalRowMovies = [];
-        for (let i = 0; i < repeatCount; i++) {
-          finalRowMovies.push(...rowMovies);
+      categoriesToBake.forEach(cat => {
+        let filteredMovies = [];
+        if (cat === 'All') {
+          filteredMovies = [...trendingMoviesList];
+        } else {
+          filteredMovies = trendingMoviesList.filter(movie => {
+            const movieCat = movie.category;
+            return movieCat === cat.toUpperCase() || (cat === 'Anime' && movieCat === 'ANIMEFLIX');
+          });
         }
 
-        const cardsHtml = finalRowMovies.map(movie => {
-          const catClass = movie.category.toLowerCase() === 'animeflix' ? 'anime' : movie.category.toLowerCase();
-          const categoryBadge = `<span class="cat-badge ${catClass}">${movie.category === 'ANIMEFLIX' ? 'ANIME' : movie.category}</span>`;
-          
-          const titleRaw = movie.title;
-          let mainTitle = titleRaw.split(/[({\[]/)[0].trim();
-          if (!mainTitle) mainTitle = titleRaw;
-          
-          let extraDetails = titleRaw.substring(mainTitle.length).trim();
-          
-          return `
-            <div class="movie-card static-overlay" data-category="${movie.category}" onclick="event.stopPropagation(); handleShowcaseCardClick(this, '${encodeURIComponent(JSON.stringify(movie))}')">
-              <div class="poster-wrap">
-                ${movie.thumbnail ? `<img src="/api/thumbnail?url=${encodeURIComponent(movie.thumbnail)}" class="poster-img" loading="eager">` : `<div class="poster-placeholder"><i class="fa fa-film"></i></div>`}
-                <div class="poster-hover-overlay">
-                  <div class="hover-overlay-content">
-                    <span class="hover-overlay-main-title">${mainTitle}</span>
-                    ${extraDetails ? `<span class="hover-overlay-extra">${extraDetails}</span>` : ''}
-                  </div>
-                </div>
+        const isActive = (cat === currentCategory);
+
+        if (filteredMovies.length === 0) {
+          bakedContainersHtml += `
+            <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}">
+              <div style="text-align: center; color: var(--text-dim); padding: 60px 40px; width: 100vw;">
+                No trending titles available in this category.
               </div>
-              ${categoryBadge}
             </div>
           `;
-        }).join('');
+          return;
+        }
 
-        rowsHtml += `
-          <div class="marquee-row-wrapper">
-            <div class="marquee-track ${direction}" onclick="toggleMarqueePause(this)">
-              <div class="marquee-group">${cardsHtml}</div>
-              <div class="marquee-group">${cardsHtml}</div>
+        // Split into 2 rows
+        const rowCount = 2;
+        const moviesPerRow = Math.ceil(filteredMovies.length / rowCount);
+        let rowsHtml = '';
+
+        for (let r = 0; r < rowCount; r++) {
+          const start = r * moviesPerRow;
+          const rowMovies = filteredMovies.slice(start, start + moviesPerRow);
+          if (rowMovies.length === 0) continue;
+
+          const direction = (r % 2 === 0) ? 'left' : 'right';
+          
+          // Ensure there are at least 10 cards per group to avoid infinite loop gaps on wide screens
+          const repeatCount = Math.max(1, Math.ceil(10 / rowMovies.length));
+          const finalRowMovies = [];
+          for (let i = 0; i < repeatCount; i++) {
+            finalRowMovies.push(...rowMovies);
+          }
+
+          const cardsHtml = finalRowMovies.map(movie => {
+            const catClass = movie.category.toLowerCase() === 'animeflix' ? 'anime' : movie.category.toLowerCase();
+            const categoryBadge = `<span class="cat-badge ${catClass}">${movie.category === 'ANIMEFLIX' ? 'ANIME' : movie.category}</span>`;
+            
+            const titleRaw = movie.title;
+            let mainTitle = titleRaw.split(/[({\[]/)[0].trim();
+            if (!mainTitle) mainTitle = titleRaw;
+            
+            let extraDetails = titleRaw.substring(mainTitle.length).trim();
+            
+            return `
+              <div class="movie-card static-overlay" data-category="${movie.category}" onclick="event.stopPropagation(); handleShowcaseCardClick(this, '${encodeURIComponent(JSON.stringify(movie))}')">
+                <div class="poster-wrap">
+                  ${movie.thumbnail ? `<img src="/api/thumbnail?url=${encodeURIComponent(movie.thumbnail)}" class="poster-img" loading="eager">` : `<div class="poster-placeholder"><i class="fa fa-film"></i></div>`}
+                  <div class="poster-hover-overlay">
+                    <div class="hover-overlay-content">
+                      <span class="hover-overlay-main-title">${mainTitle}</span>
+                      ${extraDetails ? `<span class="hover-overlay-extra">${extraDetails}</span>` : ''}
+                    </div>
+                  </div>
+                </div>
+                ${categoryBadge}
+              </div>
+            `;
+          }).join('');
+
+          rowsHtml += `
+            <div class="marquee-row-wrapper">
+              <div class="marquee-track ${direction}" onclick="toggleMarqueePause(this)">
+                <div class="marquee-group">${cardsHtml}</div>
+                <div class="marquee-group">${cardsHtml}</div>
+              </div>
             </div>
+          `;
+        }
+
+        bakedContainersHtml += `
+          <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}">
+            ${rowsHtml}
           </div>
         `;
-      }
+      });
 
-      resultsDiv.innerHTML = `
-        <div class="trending-showcase-container">
-          ${rowsHtml}
-        </div>
-      `;
+      resultsDiv.innerHTML = bakedContainersHtml;
 
       // Initialize dynamic high-performance interactive marquees!
       initInteractiveMarquees();
@@ -505,6 +515,13 @@
             if (!track.isConnected) return;
           }
 
+          // Skip running tick if the parent category container is not active to save CPU
+          const parentContainer = track.closest('.trending-showcase-container');
+          if (parentContainer && !parentContainer.classList.contains('active')) {
+            requestAnimationFrame(tick);
+            return;
+          }
+
           if (!isDragging) {
             // Apply momentum deceleration
             if (Math.abs(velocity) > 0.1) {
@@ -580,22 +597,15 @@
       const q = document.getElementById('search-box').value.trim();
       
       if (q.length < 2) {
-        // 1. Smoothly animate out non-matching cards
-        filterShowcaseByCategory(cat);
-        updateScrollState();
-
-        // 2. Fade out the track row wrappers smoothly
-        const wrappers = document.querySelectorAll('.marquee-row-wrapper');
-        wrappers.forEach(w => {
-          w.style.transition = 'opacity 0.25s cubic-bezier(0.25, 1, 0.5, 1)';
-          w.style.opacity = '0';
+        const containers = document.querySelectorAll('.trending-showcase-container');
+        containers.forEach(container => {
+          if (container.getAttribute('data-showcase-category') === cat) {
+            container.classList.add('active');
+          } else {
+            container.classList.remove('active');
+          }
         });
-
-        // 3. Rebuild the tracks with category set only and re-initialize physics loops
-        categoryTransitionTimeout = setTimeout(() => {
-          renderTrendingShowcase();
-          categoryTransitionTimeout = null;
-        }, 300);
+        updateScrollState();
         return;
       }
       

@@ -1825,20 +1825,45 @@
       }
     }
 
-    /* ── Showcase Marquee Premium Styles ── */
+    #search-results {
+      position: relative;
+    }
+
     .trending-showcase-container {
       display: flex;
       flex-direction: column;
       gap: 20px;
       padding: 15px 0 40px 0;
       width: 100vw;
-      position: relative;
+      overflow: hidden;
+      
+      /* Premium hardware-accelerated cross-fade transitions */
+      opacity: 0;
+      pointer-events: none;
+      visibility: hidden;
+      transform: scale(0.98);
+      position: absolute;
+      top: 0;
       left: 50%;
       right: 50%;
       margin-left: -50vw;
       margin-right: -50vw;
-      overflow: hidden;
-      animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+      transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                  visibility 0.35s;
+    }
+
+    .trending-showcase-container.active {
+      opacity: 1;
+      pointer-events: auto;
+      visibility: visible;
+      transform: scale(1);
+      position: relative;
+      top: auto;
+      left: 50%;
+      right: 50%;
+      margin-left: -50vw;
+      margin-right: -50vw;
     }
 
     .marquee-row-wrapper {
