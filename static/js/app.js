@@ -205,8 +205,10 @@
           `;
         }
         resultsDiv.innerHTML = `
-          <div class="trending-showcase-container active" data-showcase-category="All">
-            ${rowsHtml}
+          <div class="showcase-fade-wrapper">
+            <div class="trending-showcase-container active" data-showcase-category="All" data-scrolling="true">
+              ${rowsHtml}
+            </div>
           </div>
         `;
         return;
@@ -230,7 +232,7 @@
 
         if (filteredMovies.length === 0) {
           bakedContainersHtml += `
-            <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}">
+            <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
               <div style="text-align: center; color: var(--text-dim); padding: 60px 40px; width: 100vw;">
                 No trending titles available in this category.
               </div>
@@ -295,13 +297,13 @@
         }
 
         bakedContainersHtml += `
-          <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}">
+          <div class="trending-showcase-container ${isActive ? 'active' : ''}" data-showcase-category="${cat}" data-scrolling="${isActive ? 'true' : 'false'}">
             ${rowsHtml}
           </div>
         `;
       });
 
-      resultsDiv.innerHTML = bakedContainersHtml;
+      resultsDiv.innerHTML = `<div class="showcase-fade-wrapper">${bakedContainersHtml}</div>`;
 
       // Initialize dynamic high-performance interactive marquees!
       initInteractiveMarquees();
@@ -515,9 +517,9 @@
             if (!track.isConnected) return;
           }
 
-          // Skip running tick if the parent category container is not active to save CPU
+          // Skip running tick if the parent category container is paused to save CPU
           const parentContainer = track.closest('.trending-showcase-container');
-          if (parentContainer && !parentContainer.classList.contains('active')) {
+          if (parentContainer && parentContainer.dataset.scrolling === 'false') {
             requestAnimationFrame(tick);
             return;
           }
@@ -599,10 +601,23 @@
       if (q.length < 2) {
         const containers = document.querySelectorAll('.trending-showcase-container');
         containers.forEach(container => {
-          if (container.getAttribute('data-showcase-category') === cat) {
+          const containerCat = container.getAttribute('data-showcase-category');
+          if (containerCat === cat) {
             container.classList.add('active');
+            container.dataset.scrolling = 'true';
           } else {
-            container.classList.remove('active');
+            if (container.classList.contains('active')) {
+              // Keep scrolling during the 400ms fade-out transition, then pause to save CPU
+              container.classList.remove('active');
+              setTimeout(() => {
+                if (!container.classList.contains('active')) {
+                  container.dataset.scrolling = 'false';
+                }
+              }, 400);
+            } else {
+              container.classList.remove('active');
+              container.dataset.scrolling = 'false';
+            }
           }
         });
         updateScrollState();

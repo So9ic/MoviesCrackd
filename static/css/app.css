@@ -1829,41 +1829,41 @@
       position: relative;
     }
 
+    .showcase-fade-wrapper {
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr;
+      width: 100%;
+      position: relative;
+    }
+
     .trending-showcase-container {
+      grid-column: 1;
+      grid-row: 1;
       display: flex;
       flex-direction: column;
       gap: 20px;
       padding: 15px 0 40px 0;
       width: 100vw;
       overflow: hidden;
-      
-      /* Premium hardware-accelerated cross-fade transitions */
-      opacity: 0;
-      pointer-events: none;
-      visibility: hidden;
-      transform: scale(0.98);
-      position: absolute;
-      top: 0;
+      position: relative;
       left: 50%;
       right: 50%;
       margin-left: -50vw;
       margin-right: -50vw;
-      transition: opacity 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-                  transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
-                  visibility 0.35s;
+      
+      /* GPU-accelerated opacity-only transitions with zero reflows */
+      opacity: 0;
+      pointer-events: none;
+      visibility: hidden;
+      transition: opacity 0.3s cubic-bezier(0.25, 1, 0.5, 1), visibility 0.3s;
+      will-change: opacity;
     }
 
     .trending-showcase-container.active {
       opacity: 1;
       pointer-events: auto;
       visibility: visible;
-      transform: scale(1);
-      position: relative;
-      top: auto;
-      left: 50%;
-      right: 50%;
-      margin-left: -50vw;
-      margin-right: -50vw;
     }
 
     .marquee-row-wrapper {
