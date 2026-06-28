@@ -1852,26 +1852,26 @@
       margin-left: -50vw;
       margin-right: -50vw;
       
-      /* GPU-accelerated opacity-only transitions with zero reflows */
-      opacity: 0;
       pointer-events: none;
       visibility: hidden;
-      transition: opacity 0.3s cubic-bezier(0.25, 1, 0.5, 1), visibility 0.3s;
-      will-change: opacity;
+      /* On exit, delay visibility toggle to allow cards to finish fading out (0.6s) */
+      transition: visibility 0s 0.6s;
     }
 
     .trending-showcase-container.active {
-      opacity: 1;
       pointer-events: auto;
       visibility: visible;
+      /* On entry, activate visibility instantly */
+      transition: visibility 0s 0s;
     }
 
     /* Staggered Premium Card Animations inside Showcase */
     .trending-showcase-container .movie-card {
-      opacity: 0.15;
-      transform: scale(0.82) translate3d(0, 20px, 0);
-      transition: transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1),
+      opacity: 0;
+      transform: scale(0.8) translate3d(0, 30px, 0);
+      transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
                   opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+      will-change: transform, opacity;
     }
 
     .trending-showcase-container.active .movie-card {
