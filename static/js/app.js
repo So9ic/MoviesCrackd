@@ -334,7 +334,6 @@
 
       // Cache hover-device detection once (doesn't change at runtime)
       const isHoverDevice = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
-
       const tracks = document.querySelectorAll('.marquee-track');
       tracks.forEach(track => {
         // Prevent duplicate initialization
@@ -344,8 +343,9 @@
         const isLeft = track.classList.contains('left');
         const baseSpeed = isLeft ? -0.8 : 0.8;
         
-        // Cache parent wrapper reference once (avoids DOM traversal every frame)
+        // Cache parent wrapper and container references once (avoids DOM traversal every frame)
         const wrapper = track.closest('.marquee-row-wrapper');
+        const parentContainer = track.closest('.trending-showcase-container');
         
         let x = 0;
         let lastRenderedX = NaN; // Track last written x to skip redundant DOM writes
@@ -377,15 +377,24 @@
         track.style.transition = 'none';
 
         // Cache wrap distance — recalculate only on resize, not every frame
-        // Detects actual CSS gap dynamically instead of hardcoding
+        // Detects actual CSS gap dynamically based on mobile layout rules
         function measureWrapDist() {
           if (!track.isConnected) return;
           const group = track.querySelector('.marquee-group');
           if (!group) { cachedWrapDist = 0; return; }
-          const gap = parseFloat(getComputedStyle(track).gap) || 24;
+          const gap = window.innerWidth <= 768 ? 12 : 24;
           cachedWrapDist = group.offsetWidth + gap;
         }
-        let resizeListener = () => { measureWrapDist(); };
+        
+        // Debounce resize listener to prevent layout thrashing on window resize
+        let resizeTimeout = null;
+        let resizeListener = () => {
+          if (resizeTimeout) clearTimeout(resizeTimeout);
+          resizeTimeout = setTimeout(() => {
+            measureWrapDist();
+            resizeTimeout = null;
+          }, 100);
+        };
         window.addEventListener('resize', resizeListener);
 
         function wrapOffset(val) {
@@ -508,8 +517,10 @@
         });
         pauseObserver.observe(track, { attributes: true, attributeFilter: ['class'] });
 
+        let lastFrameTime = NaN;
+
         // Smooth Physics Autoplay Tick Loop
-        function tick() {
+        function tick(now) {
           if (!alive) return;
           // Throttle DOM connectivity check to every ~60 frames (~1 second) instead of every frame
           if (++frameCount >= 60) {
@@ -518,24 +529,33 @@
           }
 
           // Skip running tick if the parent category container is paused to save CPU
-          const parentContainer = track.closest('.trending-showcase-container');
           if (parentContainer && parentContainer.dataset.scrolling === 'false') {
+            lastFrameTime = NaN; // Reset on pause to avoid frame time spikes
             requestAnimationFrame(tick);
             return;
           }
 
+          // Normalize timestamp and calculate delta time
+          if (!now) now = performance.now();
+          if (isNaN(lastFrameTime)) lastFrameTime = now;
+          const dt = now - lastFrameTime;
+          lastFrameTime = now;
+
+          // Scale updates relative to standard 60fps frame duration (16.666ms)
+          const deltaScale = Math.min(100, dt) / 16.666;
+
           if (!isDragging) {
-            // Apply momentum deceleration
+            // Apply momentum deceleration using time-scaled damping
             if (Math.abs(velocity) > 0.1) {
-              x += velocity;
-              velocity *= 0.94;
+              x += velocity * deltaScale;
+              velocity *= Math.pow(0.94, deltaScale);
             } else {
               velocity = 0;
             }
 
             // Hover-pause uses cached boolean (set by mouseenter/mouseleave)
             if (!isHovered && !trackPaused) {
-              x += baseSpeed;
+              x += baseSpeed * deltaScale;
             }
             
             x = wrapOffset(x);
@@ -545,6 +565,9 @@
               lastRenderedX = x;
               track.style.transform = 'translate3d(' + x + 'px,0,0)';
             }
+          } else {
+            // Reset frame time during active drag to avoid massive delta jumps upon release
+            lastFrameTime = now;
           }
           
           requestAnimationFrame(tick);
@@ -569,6 +592,7 @@
           alive = false;
           pauseObserver.disconnect();
           window.removeEventListener('resize', resizeListener);
+          if (resizeTimeout) clearTimeout(resizeTimeout);
         });
       });
 
