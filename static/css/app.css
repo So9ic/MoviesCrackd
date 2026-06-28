@@ -845,9 +845,17 @@
       top: 0;
       left: 0;
       height: 100%;
-      background: linear-gradient(90deg, #059669 0%, #00c853 100%); /* Thick vibrant solid green gradient */
+      background: none;
       z-index: 1;
       transition: width 1.2s cubic-bezier(0.1, 0.8, 0.25, 1); /* super smooth, slow ease-out transition */
+      overflow: visible;
+
+      /* CSS variables for default green state */
+      --liquid-color-1: #059669;
+      --liquid-color-2: #00c853;
+      --wave-color-1: rgba(0, 200, 83, 0.35);
+      --wave-color-2: rgba(5, 150, 105, 0.5);
+      --glow-color: rgba(0, 200, 83, 0.6);
     }
 
     .dl-progress-liquid.dl-done-fade {
@@ -857,56 +865,117 @@
       transition: width 0.4s cubic-bezier(0.1, 0.8, 0.3, 1), opacity 0.6s ease-in-out 0.4s;
     }
 
-    /* Wave caps on the leading edge (rotated liquid wave technique) */
-    .dl-wave-1 {
-      position: absolute;
-      top: 50%;
-      right: -43px; /* centered on the rightmost edge */
-      width: 86px;
-      height: 86px;
-      margin-top: -43px; /* center vertically */
-      border-radius: 38% 43% 40% 45%;
-      transform-origin: 50% 50%;
-      background-color: #00c853; /* matches the bright solid green */
-      animation: waveRotate 6s linear infinite;
-      z-index: 2;
-    }
-
-    .dl-wave-2 {
-      position: absolute;
-      top: 50%;
-      right: -48px;
-      width: 96px;
-      height: 96px;
-      margin-top: -48px;
-      border-radius: 40% 45% 42% 47%;
-      transform-origin: 50% 50%;
-      background-color: rgba(0, 200, 83, 0.45); /* green translucent */
-      animation: waveRotateOpposite 3.5s linear infinite;
-      z-index: 1;
-    }
-
     .dl-progress-liquid.dl-downloading {
-      background: linear-gradient(90deg, #2563eb 0%, #3b82f6 100%); /* Thick vibrant solid blue gradient */
-    }
-    
-    .dl-progress-liquid.dl-downloading .dl-wave-1 {
-      background-color: #3b82f6; /* matches the bright solid blue */
-    }
-
-    .dl-progress-liquid.dl-downloading .dl-wave-2 {
-      background-color: rgba(37, 99, 235, 0.45); /* blue translucent */
+      background: none;
+      --liquid-color-1: #2563eb;
+      --liquid-color-2: #3b82f6;
+      --wave-color-1: rgba(59, 130, 246, 0.35);
+      --wave-color-2: rgba(37, 99, 235, 0.5);
+      --glow-color: rgba(59, 130, 246, 0.6);
     }
 
-    @keyframes waveRotate {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
+    /* Premium liquid progress bar SVG styling */
+    .dl-progress-svg {
+      position: absolute;
+      right: 0;
+      top: 0;
+      height: 100%;
+      width: 2000px;
+      pointer-events: none;
+      filter: drop-shadow(0 0 8px var(--glow-color));
+      z-index: 1;
+      overflow: visible;
     }
 
-    @keyframes waveRotateOpposite {
-      0% { transform: rotate(360deg); }
-      100% { transform: rotate(0deg); }
+    .wave-path {
+      transform-origin: 50% 50%;
     }
+
+    .wave-1 {
+      animation: waveFlow1 4s linear infinite;
+    }
+
+    .wave-2 {
+      animation: waveFlow2 7s linear infinite;
+    }
+
+    @keyframes waveFlow1 {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-200px); }
+    }
+
+    @keyframes waveFlow2 {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-260px); }
+    }
+
+    /* Particles floating at the leading edge */
+    .dl-particles {
+      position: absolute;
+      top: 0;
+      right: 0; /* Align with the leading edge */
+      width: 40px;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 3;
+    }
+
+    .dl-particle {
+      position: absolute;
+      width: 3.5px;
+      height: 3.5px;
+      background-color: var(--liquid-color-2);
+      border-radius: 50%;
+      box-shadow: 0 0 6px var(--liquid-color-2);
+      opacity: 0;
+    }
+
+    .dl-particle-1 {
+      top: 20%;
+      animation: floatParticle1 3s ease-in-out infinite;
+    }
+    .dl-particle-2 {
+      top: 45%;
+      animation: floatParticle2 2.5s ease-in-out infinite 0.8s;
+    }
+    .dl-particle-3 {
+      top: 70%;
+      animation: floatParticle3 3.5s ease-in-out infinite 0.4s;
+    }
+    .dl-particle-4 {
+      top: 35%;
+      animation: floatParticle4 2.8s ease-in-out infinite 1.2s;
+    }
+
+    @keyframes floatParticle1 {
+      0% { transform: translate(0, 0) scale(1); opacity: 0; }
+      10% { opacity: 0.8; }
+      80% { opacity: 0.8; }
+      100% { transform: translate(25px, -10px) scale(0); opacity: 0; }
+    }
+
+    @keyframes floatParticle2 {
+      0% { transform: translate(0, 0) scale(1); opacity: 0; }
+      10% { opacity: 0.9; }
+      80% { opacity: 0.9; }
+      100% { transform: translate(35px, 5px) scale(0); opacity: 0; }
+    }
+
+    @keyframes floatParticle3 {
+      0% { transform: translate(0, 0) scale(1); opacity: 0; }
+      10% { opacity: 0.7; }
+      80% { opacity: 0.7; }
+      100% { transform: translate(20px, 12px) scale(0); opacity: 0; }
+    }
+
+    @keyframes floatParticle4 {
+      0% { transform: translate(0, 0) scale(1); opacity: 0; }
+      10% { opacity: 0.85; }
+      80% { opacity: 0.85; }
+      100% { transform: translate(30px, -6px) scale(0); opacity: 0; }
+    }
+
 
     .dl-status-compact {
       font-size: 12px;
