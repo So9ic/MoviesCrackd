@@ -23,6 +23,22 @@ from skip_shortener import bypass_shortener
 
 
 WORKING_PROXY = None
+CACHED_PROXIES = []
+
+def get_proxy_list() -> list[str]:
+    """Fetch a fresh list of HTTP proxies from Proxyscrape."""
+    global CACHED_PROXIES
+    if CACHED_PROXIES:
+        return list(CACHED_PROXIES)
+    try:
+        proxy_url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all'
+        r = requests.get(proxy_url, timeout=(3.05, 5))
+        proxies = [p.strip() for p in r.text.strip().split('\n') if p.strip()]
+        CACHED_PROXIES = list(proxies)
+        return proxies
+    except Exception as e:
+        print(f"    [-] Failed to fetch proxy list: {e}")
+        return []
 
 
 # Labels to EXCLUDE — junk/nav links and batch links (not individual episodes)
@@ -73,9 +89,7 @@ def scrape_links(page_url: str) -> list[dict]:
     if not html:
         print("    [!] Direct request failed or blocked by Cloudflare. Fetching proxy list...")
         try:
-            proxy_url = 'https://api.proxyscrape.com/v2/?request=displayproxies&protocol=http&timeout=5000&country=all&ssl=all&anonymity=all'
-            r = requests.get(proxy_url, timeout=(3.05, 5))
-            proxies = [p.strip() for p in r.text.strip().split('\n') if p.strip()]
+            proxies = get_proxy_list()
             
             import random
             random.shuffle(proxies)
@@ -184,13 +198,98 @@ def scrape_links(page_url: str) -> list[dict]:
     return links
 
 
+def find_working_proxy_for_url(url: str, candidates: list[str]) -> str:
+    """Test candidate proxies in parallel and return the first one that successfully reaches the URL."""
+    def test_one(p):
+        try:
+            p_dict = {'http': f'http://{p}', 'https': f'http://{p}'}
+            resp = requests.get(
+                url,
+                headers={
+                    'User-Agent': (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/131.0.0.0 Safari/537.36'
+                    )
+                },
+                proxies=p_dict,
+                stream=True,
+                allow_redirects=False,
+                timeout=(3.05, 5),
+            )
+            if resp.status_code in (200, 301, 302, 307):
+                return p
+        except Exception:
+            pass
+        return None
+
+    with ThreadPoolExecutor(max_workers=25) as executor:
+        futures = {executor.submit(test_one, p): p for p in candidates[:50]}
+        for future in as_completed(futures):
+            p = future.result()
+            if p:
+                for f in futures:
+                    f.cancel()
+                return p
+    return None
+
 def follow_redirect(url: str) -> str:
     """Follow a 302 redirect and return the final destination URL, resolving any Javascript redirects."""
     global WORKING_PROXY
-    proxies = None
+    
+    # Try WORKING_PROXY first if set
     if WORKING_PROXY:
-        proxies = {'http': f'http://{WORKING_PROXY}', 'https': f'http://{WORKING_PROXY}'}
-        
+        try:
+            resp = requests.get(
+                url,
+                allow_redirects=True,
+                headers={
+                    'User-Agent': (
+                        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                        'AppleWebKit/537.36 (KHTML, like Gecko) '
+                        'Chrome/131.0.0.0 Safari/537.36'
+                    )
+                },
+                proxies={'http': f'http://{WORKING_PROXY}', 'https': f'http://{WORKING_PROXY}'},
+                stream=True,
+                timeout=(3.05, 10),
+            )
+            final_url = resp.url
+            html = ""
+            for chunk in resp.iter_content(chunk_size=4096, decode_unicode=True):
+                if chunk:
+                    html += chunk
+                if len(html) >= 4096:
+                    break
+            js_match = re.search(
+                r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
+                html,
+                re.IGNORECASE
+            )
+            if js_match:
+                relative_target = js_match.group(1)
+                final_url = urljoin(final_url, relative_target)
+                print(f"    [+] Resolved JS redirect using active proxy {WORKING_PROXY} to: {final_url}")
+            else:
+                print(f"    [+] Resolved redirect using active proxy {WORKING_PROXY} to: {final_url}")
+            return final_url
+        except Exception as e:
+            print(f"    [-] follow_redirect with existing WORKING_PROXY {WORKING_PROXY} failed: {e}")
+            WORKING_PROXY = None # reset since it failed
+            
+    # Find a new proxy to follow the redirect
+    print("[*] Finding a working proxy to follow redirect...")
+    fetched = get_proxy_list()
+    p = find_working_proxy_for_url(url, fetched)
+    
+    if p:
+        print(f"    [+] Found working proxy for redirect: {p}")
+        WORKING_PROXY = p
+        proxies = {'http': f'http://{p}', 'https': f'http://{p}'}
+    else:
+        print("    [-] Could not find any working proxy. Trying direct connection as fallback...")
+        proxies = None
+
     try:
         resp = requests.get(
             url,
@@ -207,15 +306,12 @@ def follow_redirect(url: str) -> str:
             timeout=(3.05, 10),
         )
         final_url = resp.url
-        
-        # Read the decoded HTML chunk to find any window.location redirect
         html = ""
         for chunk in resp.iter_content(chunk_size=4096, decode_unicode=True):
             if chunk:
                 html += chunk
             if len(html) >= 4096:
                 break
-                
         js_match = re.search(
             r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
             html,
@@ -225,45 +321,12 @@ def follow_redirect(url: str) -> str:
             relative_target = js_match.group(1)
             final_url = urljoin(final_url, relative_target)
             print(f"    [+] Resolved JS redirect to: {final_url}")
-            
+        else:
+            print(f"    [+] Resolved redirect to: {final_url}")
         return final_url
     except Exception as e:
         print(f"    [-] follow_redirect failed: {e}")
-        # If it failed with the proxy, we try once without proxy as a fallback!
-        if proxies:
-            try:
-                resp = requests.get(
-                    url,
-                    allow_redirects=True,
-                    headers={
-                        'User-Agent': (
-                            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                            'AppleWebKit/537.36 (KHTML, like Gecko) '
-                            'Chrome/131.0.0.0 Safari/537.36'
-                        )
-                    },
-                    stream=True,
-                    timeout=(3.05, 10),
-                )
-                final_url = resp.url
-                html = ""
-                for chunk in resp.iter_content(chunk_size=4096, decode_unicode=True):
-                    if chunk:
-                        html += chunk
-                    if len(html) >= 4096:
-                        break
-                js_match = re.search(
-                    r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
-                    html,
-                    re.IGNORECASE
-                )
-                if js_match:
-                    relative_target = js_match.group(1)
-                    final_url = urljoin(final_url, relative_target)
-                return final_url
-            except Exception:
-                pass
-                
+        
     return url
 
 

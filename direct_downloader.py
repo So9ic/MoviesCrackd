@@ -21,7 +21,7 @@ import re
 import sys
 import time
 import requests
-from urllib.parse import urlparse, parse_qs, unquote
+from urllib.parse import urlparse, parse_qs, unquote, urljoin
 
 from env_loader import load_env_file
 
@@ -59,16 +59,52 @@ SESSION.mount('http://', _adapter)
 
 
 def _follow_download_link(download_url: str) -> str | None:
-    """Follow a video-leech/video-seed redirect to get the final download URL."""
+    """Follow a video-leech/video-seed redirect to get the final download URL, using proxy fallbacks if needed."""
+    # Get proxy from batch_episodes if set
+    proxies = None
     try:
-        try:
-            redirect_resp = SESSION.head(download_url, allow_redirects=True, timeout=30)
-            final_url = redirect_resp.url
-        except Exception:
-            # Fallback to GET stream=True if HEAD fails
-            redirect_resp = SESSION.get(download_url, allow_redirects=True, stream=True, timeout=30)
-            final_url = redirect_resp.url
+        import batch_episodes
+        if batch_episodes.WORKING_PROXY:
+            p = batch_episodes.WORKING_PROXY
+            proxies = {'http': f'http://{p}', 'https': f'http://{p}'}
+    except Exception:
+        pass
 
+    # Try following redirect (using proxy if available)
+    html = ""
+    final_url = download_url
+    try:
+        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=15)
+        final_url = redirect_resp.url
+        html = redirect_resp.text
+    except Exception as e:
+        print(f"    [-] Direct request or primary proxy failed for download link: {e}")
+        # Try finding a working proxy from proxy list
+        try:
+            import batch_episodes
+            fetched = batch_episodes.get_proxy_list()
+            if fetched:
+                p = batch_episodes.find_working_proxy_for_url(download_url, fetched)
+                if p:
+                    print(f"    [+] Found working proxy for download redirect: {p}")
+                    batch_episodes.WORKING_PROXY = p
+                    proxies = {'http': f'http://{p}', 'https': f'http://{p}'}
+                    try:
+                        redirect_resp = SESSION.get(download_url, allow_redirects=True, proxies=proxies, timeout=15)
+                        final_url = redirect_resp.url
+                        html = redirect_resp.text
+                    except Exception as e2:
+                        print(f"    [-] Proxy attempt failed for download redirect: {e2}")
+                        return None
+                else:
+                    return None
+            else:
+                return None
+        except Exception as e_proxy:
+            print(f"    [-] Error in proxy fallback for download redirect: {e_proxy}")
+            return None
+
+    try:
         # Extract ?url= parameter from video-seed
         if 'video-seed' in final_url:
             parsed = urlparse(final_url)
@@ -76,21 +112,42 @@ def _follow_download_link(download_url: str) -> str | None:
             if 'url' in qs:
                 return qs['url'][0]
 
+        # Handle JS redirect: window.location.href = "/upload?url=..."
+        js_match = re.search(
+            r'(?:window\.)?location(?:\.replace|\.href)?\s*[\(=]\s*["\']([^"\']+)["\']',
+            html,
+            re.IGNORECASE
+        )
+        if js_match:
+            relative_target = js_match.group(1)
+            next_url = urljoin(final_url, relative_target)
+            print(f"    [+] Following JS redirect to: {next_url}")
+            # Fetch the target page using proxy/direct session
+            resp = SESSION.get(next_url, allow_redirects=True, proxies=proxies, timeout=15)
+            final_url = resp.url
+            html = resp.text
+
         # Try fetching the page for a googleusercontent link
         if 'googleusercontent.com' not in final_url:
-            page_resp = SESSION.get(final_url, timeout=30)
             gc_match = re.search(
                 r'href=["\']([^"\']*googleusercontent\.com[^"\']*)["\']',
-                page_resp.text,
+                html,
             )
             if gc_match:
                 return gc_match.group(1)
+            
+            # Check url query param (if redirected to videoseed with ?url=)
+            parsed = urlparse(final_url)
+            qs = parse_qs(parsed.query)
+            if 'url' in qs and 'googleusercontent.com' in qs['url'][0]:
+                return qs['url'][0]
 
         if 'googleusercontent.com' in final_url:
             return final_url
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"    [-] Error parsing download redirect page: {e}")
+        
     return None
 
 
