@@ -1865,25 +1865,20 @@
       transition: visibility 0s 0s;
     }
 
-    /* Staggered Premium Card Animations inside Showcase */
-    /* Staggered Premium Card Animations inside Showcase */
+    /* Card entrance/exit animations — opacity-only for zero jitter on mobile */
     /* Must target .static-overlay to win specificity over line ~1954 */
     .trending-showcase-container .movie-card.static-overlay {
-      opacity: 0;
-      transform: scale(0.8) translate3d(0, 30px, 0) !important;
-      transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1),
-                  opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1) !important;
-      will-change: transform, opacity;
+      opacity: 0 !important;
+      transition: opacity 0.35s cubic-bezier(0.25, 1, 0.5, 1) !important;
     }
 
     .trending-showcase-container.active .movie-card.static-overlay {
-      opacity: 1;
-      transform: scale(1) translate3d(0, 0, 0) !important;
+      opacity: 1 !important;
     }
 
     /* Stagger the rows slightly for a fluid wave effect */
     .trending-showcase-container .marquee-row-wrapper:nth-child(2) .movie-card.static-overlay {
-      transition-delay: 75ms;
+      transition-delay: 80ms;
     }
 
     /* Keep hover zoom effects snappy and responsive */
