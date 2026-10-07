@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bypass script for tech.unblockedgames.world URL shortener.
+Bypass script for en.thenaukriadda.in URL shortener.
 
 Flow:
 1. GET the ?sid= URL → landing page with auto-submit POST form (_wp_http → root)
@@ -22,16 +22,16 @@ from html.parser import HTMLParser
 
 # ── Pre-compiled regex patterns (avoid recompilation per call) ──────────
 _RE_COOKIE_SETTER = re.compile(
-    r"s_\d+\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*,\s*(\d+)\s*\)"
+    r"(?:s_\d+|sc)\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*,\s*(\d+)\s*\)"
 )
 _RE_COOKIE_DIRECT = re.compile(
     r"document\.cookie\s*=\s*['\"]([^=]+)=([^;]+);"
 )
-_RE_PEPE_NAME = re.compile(r"['\"]?(pepe-[a-f0-9]+)['\"]?")
+_RE_PEPE_NAME = re.compile(r"['\"]?((?:pepe|lp)-[a-f0-9]+)['\"]?")
 _RE_DEST_PATTERNS = [
     re.compile(r'href=["\']([^"\']*driveseed[^"\']*)["\']', re.IGNORECASE),
     re.compile(r'href=["\']([^"\']*drive\.[^"\']*)["\']', re.IGNORECASE),
-    re.compile(r'window\.location(?:\.href)?\s*=\s*["\']([^"\']+)["\']', re.IGNORECASE),
+    re.compile(r'window\.location(?:\.href|\.replace)?\s*(?:=|\()\s*["\']([^"\']+)["\']', re.IGNORECASE),
     re.compile(r'http-equiv=["\']refresh["\'][^>]*url=([^"\'>\s]+)', re.IGNORECASE),
     re.compile(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>.*?(?:download|destination)', re.IGNORECASE),
 ]
@@ -155,7 +155,7 @@ def extract_cookie_call(html: str) -> tuple:
     return None, None
 
 
-def do_post_step(session, html, step_num, referer, verbose=True, default_domain='tech.unblockedgames.world'):
+def do_post_step(session, html, step_num, referer, verbose=True, default_domain='en.thenaukriadda.in'):
     """Submit a POST form found in the HTML, return the response."""
     forms = extract_forms(html)
     if not forms:
@@ -205,8 +205,7 @@ def do_post_step(session, html, step_num, referer, verbose=True, default_domain=
     return resp, resp.text
 
 
-# Cache the last known working shortener domain globally
-LAST_WORKING_DOMAIN = 'health.jkssbworld.in'
+# We use the domain provided in the URL directly.
 BYPASS_SEM = threading.Semaphore(3)
 
 
@@ -216,7 +215,7 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
     Allows parallel execution up to 3 slots with isolated cookie jars.
     Uses SID-keyed cache — repeated calls for the same SID return instantly.
     """
-    global LAST_WORKING_DOMAIN, BYPASS_SEM
+    global BYPASS_SEM
 
     # ── Cache lookup: return instantly if we've resolved this SID before ──
     sid = _extract_sid(url)
@@ -251,20 +250,11 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
         target_url = url
         try:
             parsed_url = urlparse(target_url)
-            initial_domain = parsed_url.netloc or LAST_WORKING_DOMAIN
+            initial_domain = parsed_url.netloc
         except Exception:
-            initial_domain = LAST_WORKING_DOMAIN
+            initial_domain = ""
 
-        # Proactive self-healing domain swap if we know the domain is down/failing
-        if initial_domain and LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
-            if 'unblockedgames' in initial_domain:
-                if verbose:
-                    print(f"[*] Proactive domain swap: replacing {initial_domain} with last working domain {LAST_WORKING_DOMAIN}")
-                target_url = target_url.replace(initial_domain, LAST_WORKING_DOMAIN)
-                initial_domain = LAST_WORKING_DOMAIN
-
-        # We run the bypass in a loop (up to 2 iterations for domain swapping fallback)
-        for run_attempt in range(2):
+        if True:
             try:
                 # ── Step 1: GET the ?sid= landing page ──
                 if verbose:
@@ -289,14 +279,6 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
 
                 current_html = resp.text
                 current_url = resp.url
-
-                # Save the successful domain to our global cache
-                try:
-                    last_netloc = urlparse(current_url).netloc
-                    if last_netloc:
-                        LAST_WORKING_DOMAIN = last_netloc
-                except Exception:
-                    pass
 
                 # ── Step 2+: Keep POSTing forms until we find the cookie ──
                 step = 2
@@ -345,8 +327,9 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                 if verbose:
                     print(f"\n[{step + 1}] Cookie set in session")
 
-                # ── Follow the ?go= redirect ──
-                go_url = f"https://{shortener_domain}/?go={cookie_name}"
+                # ── Follow the ?go= or ?lp_go= redirect ──
+                go_param = 'lp_go' if cookie_name.startswith('lp-') else 'go'
+                go_url = f"https://{shortener_domain}/?{go_param}={cookie_name}"
                 if verbose:
                     print(f"\n[{step + 2}] Following redirect: {go_url}")
 
@@ -373,21 +356,21 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
 
                 # If we're still on the shortener domain, try to find the real destination
                 final_domain_lower = urlparse(final_url).netloc.lower()
-                if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
+                if shortener_domain.lower() in final_domain_lower:
                     if verbose:
                         print("    Still on shortener domain, looking for destination...")
 
                     for pat in _RE_DEST_PATTERNS:
                         m = pat.search(resp_final.text)
                         if m:
-                            candidate = m.group(1)
+                            candidate = m.group(1).replace(r'\/', '/')
                             candidate_domain = urlparse(candidate).netloc.lower()
-                            if shortener_domain.lower() not in candidate_domain and 'unblockedgames' not in candidate_domain:
+                            if shortener_domain.lower() not in candidate_domain:
                                 final_url = candidate
                                 break
 
                     final_domain_lower = urlparse(final_url).netloc.lower()
-                    if shortener_domain.lower() in final_domain_lower or 'unblockedgames' in final_domain_lower:
+                    if shortener_domain.lower() in final_domain_lower:
                         with open("/tmp/shortener_final_debug.html", "w") as f:
                             f.write(resp_final.text)
                         if verbose:
@@ -404,29 +387,15 @@ def bypass_shortener(url: str, verbose: bool = True, session: requests.Session =
                 return final_url
 
             except Exception as e:
-                # If the run failed, and we haven't swapped to the last working domain, do it now and try again!
-                if run_attempt == 0 and LAST_WORKING_DOMAIN and initial_domain != LAST_WORKING_DOMAIN:
-                    if verbose:
-                        print(f"[-] Resolution failed on domain {initial_domain}: {e}. Swapping to fallback {LAST_WORKING_DOMAIN}...")
-                    target_url = target_url.replace(initial_domain, LAST_WORKING_DOMAIN)
-                    initial_domain = LAST_WORKING_DOMAIN
-                    # Reset cookies in our session
-                    session.cookies.clear()
-                    continue
-                else:
-                    raise e
+                raise e
         return final_url
 
 
 if __name__ == '__main__':
     if len(sys.argv) < 2:
         test_url = (
-            "https://health.jkssbworld.in/?sid="
-            "a3Y4azk3STZ5RVphb1c0d0pkeDllbjluV0NSTDRXNWlOSmJZTDFBU1RwM3AwTEJSbHhsejZL"
-            "cmNYQzFsVGV2QkxMUmpsdURZR3hQNEo5c2g2UHhoMWRBNmt2dWQzZWx3ZjU1dkhTT3FySFRy"
-            "M3ZvbjdDaGRiL3dmZUZVR2FCY1JjZ0FEdjI3SnhnSGZYWDhHQ1NQU1lTZXE0TTluakt0SUE0"
-            "dTI1aVlzMjNHOFZvR1BrajV1RzVQcUZKc09ZUXlDbWE3RzZkdWp1aDJzVUtvd2ROSWtoMzRh"
-            "TFE0T0NleS9zaDJHTStTWHpwNTMwOC9tbCtxMkJ1V1VnU3lQc3R5bw=="
+            "https://en.thenaukriadda.in/?sid="
+            "THpveVRFRjJpV3pwVUxzNUZOQk5KK2pWSkRsUXV6OC9TRkxtTXE2MWxwMGRXZ3RvRit3UFFNNGhsWUo3QjlXOHU1RGdpank4TkI1L2NkellmdG1zUDlRbDdOczdBVnZBV01md3dkNnpEaUxlQitFSmRRZVdTcHQ4ZFFiNXNDSzZnS3ZXZUg3QUhFdU51UFA1M0VYa0FqZ2VnVEJNUm8vZFppYTZZYTVscTRBSng3K3RTVFpFTndmUjF4clpBVzJoOGlFY0dUR2tTRnVFdzkzOWEvTXJaOUJlM2hNN0RNeFREeGY3cG9ZTHVRZTZSQWMwOStwL1d6bVRxVTZTWXJuaA=="
         )
     else:
         test_url = sys.argv[1]

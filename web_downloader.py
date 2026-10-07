@@ -217,13 +217,7 @@ DNS_DOMAINS = [
     "cloud.unblockedgames.world",
 ]
 
-# Import the shortener's last known domain for DNS pre-warming
-try:
-    from skip_shortener import LAST_WORKING_DOMAIN as _SHORTENER_DOMAIN
-    if _SHORTENER_DOMAIN and _SHORTENER_DOMAIN not in DNS_DOMAINS:
-        DNS_DOMAINS.append(_SHORTENER_DOMAIN)
-except ImportError:
-    pass
+# No longer importing a single shortener domain since it's dynamic
 
 _dns_ready = threading.Event()
 
